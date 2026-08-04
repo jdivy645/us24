@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>US24 Solutions — VOB Generator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{
+  --ink:#0F1B2D;
+  --ink-soft:#43536B;
+  --line:#DDE4EE;
+  --paper:#F5F7FA;
+  --white:#FFFFFF;
+  --brand:#1B3A6B;
+  --brand-lift:#2C5AA0;
+  --accent:#E8761F;
+  --ok:#0E7C5A;
+  --ok-bg:#E7F5EF;
+  --warn-bg:#FDF0E4;
+  --shadow:0 1px 2px rgba(15,27,45,.06),0 8px 28px rgba(15,27,45,.07);
+  --r:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  background:var(--paper);color:var(--ink);font-size:14px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+/* ---------- Top bar ---------- */
+.topbar{
+  background:var(--brand);color:#fff;padding:0 28px;
+  display:flex;align-items:center;justify-content:space-between;
+  height:64px;position:sticky;top:0;z-index:50;
+  box-shadow:0 1px 0 rgba(255,255,255,.08),0 4px 20px rgba(15,27,45,.18);
+}
+.brand{display:flex;align-items:center;gap:14px}
+.brand-mark{
+  font-size:19px;font-weight:800;letter-spacing:-.02em;
+}
+.brand-mark span{color:var(--accent)}
+.brand-rule{width:1px;height:26px;background:rgba(255,255,255,.22)}
+.brand-tag{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.72);font-weight:600}
+.topbar-actions{display:flex;gap:10px;align-items:center}
+/* ---------- Tabs ---------- */
+.tabs{background:var(--white);border-bottom:1px solid var(--line);padding:0 28px;display:flex;gap:4px;position:sticky;top:64px;z-index:40}
+.tab{
+  padding:14px 18px;font-size:13px;font-weight:600;color:var(--ink-soft);
+  border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;
+  display:flex;align-items:center;gap:8px;
+}
+.tab:hover{color:var(--brand)}
+.tab.active{color:var(--brand);border-bottom-color:var(--accent)}
+.tab .count{background:var(--paper);border-radius:20px;padding:1px 8px;font-size:11px;font-weight:700}
+/* ---------- Layout ---------- */
+.wrap{max-width:1400px;margin:0 auto;padding:24px 28px 80px}
+.split{display:grid;grid-template-columns:1fr 480px;gap:24px;align-items:start}
+@media(max-width:1180px){.split{grid-template-columns:1fr}}
+/* ---------- Cards ---------- */
+.card{background:var(--white);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.card-head{
+  padding:16px 20px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;background:linear-gradient(180deg,#fff,#FBFCFE);
+}
+.card-head h2{font-size:14px;font-weight:700;letter-spacing:-.01em}
+.card-head p{font-size:12px;color:var(--ink-soft);margin-top:2px}
+.card-body{padding:20px}
+/* ---------- Form ---------- */
+.section-label{
+  font-size:10.5px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--brand);margin:26px 0 12px;display:flex;align-items:center;gap:10px;
+}
+.section-label:first-child{margin-top:0}
+.section-label::after{content:"";flex:1;height:1px;background:var(--line)}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:640px){.grid,.grid-3{grid-template-columns:1fr}}
+.f{display:flex;flex-direction:column;gap:5px}
+.f.full{grid-column:1/-1}
+label{font-size:11.5px;font-weight:600;color:var(--ink-soft)}
+label .req{color:#C0392B}
+input,select,textarea{
+  font-family:inherit;font-size:13.5px;color:var(--ink);
+  padding:9px 11px;border:1px solid var(--line);border-radius:7px;background:var(--white);
+  transition:border-color .12s,box-shadow .12s;width:100%;
+}
+input:focus,select:focus,textarea:focus{
+  outline:none;border-color:var(--brand-lift);box-shadow:0 0 0 3px rgba(44,90,160,.12);
+}
+input.err,select.err{border-color:#C0392B;box-shadow:0 0 0 3px rgba(192,57,43,.10)}
+textarea{resize:vertical;min-height:62px}
+select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' fill='none' stroke='%2343536B' stroke-width='1.6' stroke-linecap='round'/></svg>");background-repeat:no-repeat;background-position:right 11px center;padding-right:30px}
+.hint{font-size:11px;color:var(--ink-soft)}
+/* ---------- Buttons ---------- */
+.btn{
+  font-family:inherit;font-size:13px;font-weight:600;padding:9px 16px;border-radius:7px;
+  border:1px solid transparent;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+  transition:transform .08s,background .12s,box-shadow .12s;white-space:nowrap;
+}
+.btn:active{transform:translateY(1px)}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:#D06712;box-shadow:0 4px 14px rgba(232,118,31,.32)}
+.btn-dark{background:var(--brand);color:#fff}
+.btn-dark:hover{background:var(--brand-lift)}
+.btn-ghost{background:var(--white);color:var(--ink);border-color:var(--line)}
+.btn-ghost:hover{background:var(--paper);border-color:#C6D0DE}
+.btn-light{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.24)}
+.btn-light:hover{background:rgba(255,255,255,.2)}
+.btn-sm{padding:6px 11px;font-size:12px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.actionbar{
+  position:sticky;bottom:0;background:var(--white);border-top:1px solid var(--line);
+  padding:14px 20px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+}
+.actionbar .spacer{flex:1}
+/* ---------- Preview ---------- */
+.preview-shell{position:sticky;top:140px}
+.doc{
+  background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
+  overflow:hidden;font-size:9.5px;
+}
+.doc-head{padding:20px 22px 16px;border-bottom:3px solid var(--brand);position:relative}
+.doc-logo{font-size:17px;font-weight:800;letter-spacing:-.02em;color:var(--brand)}
+.doc-logo span{color:var(--accent)}
+.doc-sub{font-size:8px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-soft);font-weight:600;margin-top:3px}
+.doc-title{
+  position:absolute;right:22px;top:20px;text-align:right;
+}
+.doc-title h1{font-size:12px;font-weight:800;color:var(--brand);letter-spacing:-.01em}
+.doc-title .stamp{
+  display:inline-block;margin-top:6px;padding:4px 10px;border-radius:4px;
+  font-size:9px;font-weight:800;letter-spacing:.06em;background:var(--ok-bg);color:var(--ok);border:1px solid #B9E3D2;
+}
+.doc-body{padding:16px 22px 22px}
+.doc-sec{margin-bottom:14px}
+.doc-sec-t{
+  font-size:8px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
+  padding-bottom:4px;border-bottom:1px solid var(--line);margin-bottom:8px;
+}
+.doc-row{display:grid;grid-template-columns:1fr 1fr;gap:4px 20px}
+.doc-row.one{grid-template-columns:1fr}
+.dp{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px dotted #E9EDF3}
+.dp .k{color:var(--ink-soft);font-weight:500}
+.dp .v{font-weight:700;text-align:right}
+.doc-foot{margin-top:14px;padding-top:10px;border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:8px;color:var(--ink-soft)}
+/* ---------- Table ---------- */
+.tbl-wrap{overflow-x:auto}
+table.data{width:100%;border-collapse:collapse;font-size:12.5px}
+table.data th{
+  text-align:left;padding:10px 14px;background:var(--paper);border-bottom:1px solid var(--line);
+  font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;
+}
+table.data td{padding:11px 14px;border-bottom:1px solid #EEF2F7;white-space:nowrap}
+table.data tr:hover td{background:#FAFBFD}
+.pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:#B25E12}
+.empty{padding:60px 20px;text-align:center;color:var(--ink-soft)}
+.empty h3{font-size:14px;color:var(--ink);margin-bottom:6px}
+/* ---------- Toast ---------- */
+#toast{position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:10px}
+.toast{
+  background:var(--ink);color:#fff;padding:12px 18px;border-radius:8px;font-size:13px;font-weight:600;
+  box-shadow:0 10px 30px rgba(15,27,45,.28);animation:slide .25s ease;display:flex;gap:9px;align-items:center;
+}
+.toast.good{background:var(--ok)}
+.toast.bad{background:#C0392B}
+@keyframes slide{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+.hidden{display:none!important}
+@media print{.topbar,.tabs,.actionbar{display:none}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-mark">US<span>24</span> SOLUTIONS</div>
+    <div class="brand-rule"></div>
+    <div class="brand-tag">Verification of Benefits</div>
+  </div>
+  <div class="topbar-actions">
+    <button class="btn btn-light btn-sm" onclick="exportExcel()">Download Excel log</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" id="tab-form" onclick="showTab('form')">New verification</button>
+  <button class="tab" id="tab-log" onclick="showTab('log')">Saved records <span class="count" id="recCount">0</span></button>
+</div>
+
+<!-- ============ FORM VIEW ============ -->
+<div class="wrap" id="view-form">
+<div class="split">
+
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h2>Verification details</h2>
+        <p>Fill what the payer confirmed. Blank fields print as “—”.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="loadSample()">Load sample</button>
+    </div>
+    <div class="card-body">
+
+      <div class="section-label">Patient</div>
+      <div class="grid">
+        <div class="f"><label>Last name <span class="req">*</span></label><input id="lastName" oninput="draw()"></div>
+        <div class="f"><label>First name <span class="req">*</span></label><input id="firstName" oninput="draw()"></div>
+        <div class="f"><label>Date of birth</label><input type="date" id="dob" oninput="draw()"></div>
+        <div class="f"><label>Verification date</label><input type="date" id="today" oninput="draw()"></div>
+      </div>
+
+      <div class="section-label">Insurance</div>
+      <div class="grid">
+        <div class="f"><label>Insurance name <span class="req">*</span></label><input id="insName" oninput="draw()"></div>
+        <div class="f"><label>Payer phone</label><input id="insPhone" oninput="draw()"></div>
+        <div class="f"><label>Policy ID</label><input id="policyId" oninput="draw()"></div>
+        <div class="f"><label>Group ID</label><input id="groupId" oninput="draw()"></div>
+        <div class="f"><label>Plan type</label><input id="planType" oninput="draw()"></div>
+        <div class="f"><label>Service type</label>
+          <select id="serviceType" onchange="draw()">
+            <option>PT</option><option>OT</option><option>ST</option><option>PT/OT</option><option>Chiropractic</option><option>Other</option>
+          </select>
+        </div>
+        <div class="f"><label>Network status</label>
+          <select id="network" onchange="draw()"><option>IN NETWORK</option><option>OUT OF NETWORK</option></select>
+        </div>
+        <div class="f"><label>Coverage</label><input id="coverage" oninput="draw()"></div>
+        <div class="f"><label>Effective date</label><input type="date" id="effDate" oninput="draw()"></div>
+        <div class="f"><label>Termination date</label><input id="termDate" value="CURRENT" oninput="draw()"></div>
+        <div class="f"><label>Payer ID</label><input id="payerId" oninput="draw()"></div>
+        <div class="f"><label>HCA / HRA amount</label><input id="hra" placeholder="NA" oninput="draw()"></div>
+      </div>
+
+      <div class="section-label">Patient financials</div>
+      <div class="grid-3">
+        <div class="f"><label>Co-pay</label><select id="copay" onchange="draw()"><option>NO</option><option>YES</option></select></div>
+        <div class="f"><label>Co-pay amount</label><input id="copayAmt" placeholder="$0.00" oninput="draw()"></div>
+        <div class="f"><label>Coverage %</label><input id="covPct" placeholder="100%" oninput="draw()"></div>
+        <div class="f"><label>Co-insurance</label><select id="coins" onchange="draw()"><option>NO</option><option>YES</option></select></div>
+        <div class="f"><label>Co-insurance %</label><input id="coinsAmt" oninput="draw()"></div>
+        <div class="f"><label>Deductible applies</label><select id="dedApply" onchange="draw()"><option>NO</option><option>YES</option></select></div>
+        <div class="f"><label>Deductible (individual)</label><input id="dedInd" placeholder="NA" oninput="draw()"></div>
+        <div class="f"><label>Deductible met</label><input id="dedMet" oninput="draw()"></div>
+        <div class="f"><label>Deductible remaining</label><input id="dedRem" oninput="draw()"></div>
+        <div class="f"><label>Out of pocket max</label><input id="oop" placeholder="NA" oninput="draw()"></div>
+        <div class="f"><label>OOP met</label><input id="oopMet" oninput="draw()"></div>
+        <div class="f"><label>OOP remaining</label><input id="oopRem" oninput="draw()"></div>
+      </div>
+
+      <div class="section-label">Visits &amp; authorization</div>
+      <div class="grid">
+        <div class="f"><label>Visit limitation</label><input id="visitLimit" placeholder="MN (medically necessary)" oninput="draw()"></div>
+        <div class="f"><label>Visits used</label><input id="visitUsed" oninput="draw()"></div>
+        <div class="f"><label>Auth required — initial eval</label><select id="authEval" onchange="draw()"><option>YES</option><option>NO</option></select></div>
+        <div class="f"><label>Auth required — treatment</label><select id="authTx" onchange="draw()"><option>YES</option><option>NO</option></select></div>
+        <div class="f"><label>Referral required</label><select id="referral" onchange="draw()"><option>NO</option><option>YES</option></select></div>
+        <div class="f"><label>PCP referral for approval</label><select id="pcpRef" onchange="draw()"><option>NO</option><option>YES</option></select></div>
+        <div class="f"><label>How to obtain authorization</label><input id="authHow" oninput="draw()"></div>
+        <div class="f"><label>Auth request window from DOS</label><input id="authWindow" oninput="draw()"></div>
+        <div class="f"><label>Authorization #</label><input id="authNum" oninput="draw()"></div>
+        <div class="f"><label>Auth coverage dates</label><input id="authDates" oninput="draw()"></div>
+      </div>
+
+      <div class="section-label">Claims &amp; call record</div>
+      <div class="grid">
+        <div class="f"><label>Timely filing — claims</label><input id="tfl" placeholder="120 DAYS FROM DOS" oninput="draw()"></div>
+        <div class="f"><label>Timely filing — corrected</label><input id="tflCorr" placeholder="180 DAYS FROM DOS" oninput="draw()"></div>
+        <div class="f full"><label>Claim mailing address</label><input id="claimAddr" oninput="draw()"></div>
+        <div class="f"><label>Insurance rep name</label><input id="repName" oninput="draw()"></div>
+        <div class="f"><label>Call reference #</label><input id="callRef" oninput="draw()"></div>
+        <div class="f"><label>Verified by (your team)</label><input id="verifiedBy" oninput="draw()"></div>
+        <div class="f"><label>Primary payer</label><input id="primary" oninput="draw()"></div>
+      </div>
+
+      <div class="section-label">Secondary insurance</div>
+      <div class="grid">
+        <div class="f"><label>Secondary on file</label><select id="hasSec" onchange="draw()"><option>NO</option><option>YES</option></select></div>
+        <div class="f"><label>Secondary insurance name</label><input id="secName" oninput="draw()"></div>
+        <div class="f"><label>Plan name</label><input id="secPlan" oninput="draw()"></div>
+        <div class="f"><label>Policy ID</label><input id="secPolicy" oninput="draw()"></div>
+        <div class="f"><label>Effective date</label><input type="date" id="secEff" oninput="draw()"></div>
+        <div class="f"><label>Deductible</label><input id="secDed" placeholder="NA" oninput="draw()"></div>
+        <div class="f"><label>Visit limit</label><input id="secVisit" oninput="draw()"></div>
+        <div class="f"><label>Used limit</label><input id="secUsed" oninput="draw()"></div>
+      </div>
+
+      <div class="section-label">Summary note</div>
+      <div class="f"><label>Additional information (prints in the highlighted banner)</label>
+        <textarea id="note" oninput="draw()" placeholder="e.g. Patient is 100% covered by Aetna as per member's plan."></textarea>
+      </div>
+
+    </div>
+    <div class="actionbar">
+      <button class="btn btn-primary" onclick="saveAndGenerate()">Save &amp; generate PDF</button>
+      <button class="btn btn-dark" onclick="makePDF(false)">Preview PDF only</button>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" onclick="clearForm()">Clear form</button>
+    </div>
+  </div>
+
+  <div class="preview-shell">
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h2>Live preview</h2><p>Matches the generated PDF.</p></div></div>
+    </div>
+    <div id="doc" class="doc"></div>
+  </div>
+
+</div>
+</div>
+
+<!-- ============ LOG VIEW ============ -->
+<div class="wrap hidden" id="view-log">
+  <div class="card">
+    <div class="card-head">
+      <div><h2>Saved verifications</h2><p>Stored in this browser. Export any time to Excel.</p></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary btn-sm" onclick="exportExcel()">Download Excel</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearAll()">Clear all</button>
+      </div>
+    </div>
+    <div class="tbl-wrap" id="logArea"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const F=["lastName","firstName","dob","today","insName","insPhone","policyId","groupId","planType","serviceType","network","coverage","effDate","termDate","payerId","hra","copay","copayAmt","covPct","coins","coinsAmt","dedApply","dedInd","dedMet","dedRem","oop","oopMet","oopRem","visitLimit","visitUsed","authEval","authTx","referral","pcpRef","authHow","authWindow","authNum","authDates","tfl","tflCorr","claimAddr","repName","callRef","verifiedBy","primary","hasSec","secName","secPlan","secPolicy","secEff","secDed","secVisit","secUsed","note"];
+const KEY="us24_vob_records";
+const $=id=>document.getElementById(id);
+const g=id=>($(id)?.value||"").trim();
+const d=v=>v?v:"—";
+
+function fmtDate(s){
+  if(!s)return"";
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)){const[y,m,dd]=s.split("-");return `${m}/${dd}/${y}`;}
+  return s;
+}
+function toast(msg,type="good"){
+  const t=document.createElement("div");
+  t.className="toast "+type;t.textContent=msg;
+  $("toast").appendChild(t);
+  setTimeout(()=>t.remove(),3200);
+}
+function showTab(n){
+  ["form","log"].forEach(x=>{
+    $("view-"+x).classList.toggle("hidden",x!==n);
+    $("tab-"+x).classList.toggle("active",x===n);
+  });
+  if(n==="log")renderLog();
+}
+function collect(){const o={};F.forEach(k=>o[k]=g(k));return o;}
+
+/* ---------- Live preview ---------- */
+function draw(){
+  const v=collect();
+  const name=(v.lastName||v.firstName)?`${v.lastName||""}${v.lastName&&v.firstName?", ":""}${v.firstName||""}`:"—";
+  const pct=v.covPct||((v.copay==="NO"&&v.coins==="NO")?"100%":"");
+  const stamp=pct?`PATIENT RESPONSIBILITY COVERED: ${pct}`:"BENEFITS VERIFIED";
+
+  const pair=(k,val)=>`<div class="dp"><span class="k">${k}</span><span class="v">${d(val)}</span></div>`;
+
+  $("doc").innerHTML=`
+  <div class="doc-head">
+    <div class="doc-logo">US<span>24</span> SOLUTIONS</div>
+    <div class="doc-sub">Innovative Technology Driven</div>
+    <div class="doc-title">
+      <h1>Pre-Authorization &amp; Benefits Determination</h1>
+      <div class="stamp">${stamp}</div>
+    </div>
+  </div>
+  <div class="doc-body">
+    ${v.note?`<div style="background:var(--warn-bg);border-left:3px solid var(--accent);padding:8px 11px;border-radius:0 5px 5px 0;margin-bottom:14px;font-weight:600">${v.note}</div>`:""}
+
+    <div class="doc-sec"><div class="doc-sec-t">Patient</div><div class="doc-row">
+      ${pair("Patient name",name)}${pair("Date of birth",fmtDate(v.dob))}
+      ${pair("Verification date",fmtDate(v.today))}${pair("Verified by",v.verifiedBy)}
+    </div></div>
+
+    <div class="doc-sec"><div class="doc-sec-t">Insurance &amp; plan</div><div class="doc-row">
+      ${pair("Insurance",v.insName)}${pair("Payer phone",v.insPhone)}
+      ${pair("Policy ID",v.policyId)}${pair("Group ID",v.groupId)}
+      ${pair("Plan type",v.planType)}${pair("Service type",v.serviceType)}
+      ${pair("Network status",v.network)}${pair("Coverage",v.coverage)}
+      ${pair("Effective date",fmtDate(v.effDate))}${pair("Termination date",v.termDate)}
+      ${pair("Payer ID",v.payerId)}${pair("HCA / HRA",v.hra)}
+    </div></div>
+
+    <div class="doc-sec"><div class="doc-sec-t">Patient financial responsibility</div><div class="doc-row">
+      ${pair("Co-pay",v.copay)}${pair("Co-pay amount",v.copayAmt)}
+      ${pair("Co-insurance",v.coins)}${pair("Co-insurance %",v.coinsAmt)}
+      ${pair("Deductible applies",v.dedApply)}${pair("Deductible (ind.)",v.dedInd)}
+      ${pair("Deductible met",v.dedMet)}${pair("Deductible remaining",v.dedRem)}
+      ${pair("Out of pocket max",v.oop)}${pair("OOP met",v.oopMet)}
+      ${pair("OOP remaining",v.oopRem)}${pair("Coverage %",v.covPct)}
+    </div></div>
+
+    <div class="doc-sec"><div class="doc-sec-t">Visits &amp; authorization</div><div class="doc-row">
+      ${pair("Visit limitation",v.visitLimit)}${pair("Visits used",v.visitUsed)}
+      ${pair("Auth — initial eval",v.authEval)}${pair("Auth — treatment",v.authTx)}
+      ${pair("Referral required",v.referral)}${pair("PCP referral",v.pcpRef)}
+      ${pair("Authorization #",v.authNum)}${pair("Auth coverage dates",v.authDates)}
+    </div>
+    <div class="doc-row one" style="margin-top:4px">
+      ${pair("How to obtain authorization",v.authHow)}
+      ${pair("Auth request window from DOS",v.authWindow)}
+    </div></div>
+
+    <div class="doc-sec"><div class="doc-sec-t">Claims &amp; call record</div><div class="doc-row">
+      ${pair("Timely filing — claims",v.tfl)}${pair("Timely filing — corrected",v.tflCorr)}
+      ${pair("Primary payer",v.primary)}${pair("Secondary",v.hasSec)}
+      ${pair("Insurance rep",v.repName)}${pair("Call reference",v.callRef)}
+    </div>
+    <div class="doc-row one" style="margin-top:4px">${pair("Claim mailing address",v.claimAddr)}</div>
+    </div>
+
+    ${v.hasSec==="YES"?`<div class="doc-sec"><div class="doc-sec-t">Secondary insurance</div><div class="doc-row">
+      ${pair("Insurance",v.secName)}${pair("Plan name",v.secPlan)}
+      ${pair("Policy ID",v.secPolicy)}${pair("Effective date",fmtDate(v.secEff))}
+      ${pair("Deductible",v.secDed)}${pair("Visit limit",v.secVisit)}
+      ${pair("Used limit",v.secUsed)}${pair("","")}
+    </div></div>`:""}
+
+    <div class="doc-foot">
+      <span>US24 Solutions — Confidential. Benefits quoted are not a guarantee of payment.</span>
+      <span>Ref ${v.callRef||"—"}</span>
+    </div>
+  </div>`;
+}
+
+/* ---------- Validation ---------- */
+function validate(){
+  const need=["lastName","firstName","insName"];let ok=true;
+  need.forEach(k=>{
+    const el=$(k);
+    if(!g(k)){el.classList.add("err");ok=false;}else el.classList.remove("err");
+  });
+  if(!ok)toast("Add patient name and insurance to continue","bad");
+  return ok;
+}
+
+/* ---------- PDF ---------- */
+function makePDF(silent){
+  if(!validate())return null;
+  const v=collect();
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({unit:"pt",format:"letter"});
+  const W=doc.internal.pageSize.getWidth();
+  const M=42;
+  const NAVY=[27,58,107],ORANGE=[232,118,31],INK=[15,27,45],SOFT=[67,83,107],LINE=[221,228,238];
+
+  // Header
+  doc.setFont("helvetica","bold");doc.setFontSize(17);doc.setTextColor(...NAVY);
+  doc.text("US",M,54);
+  const w1=doc.getTextWidth("US");
+  doc.setTextColor(...ORANGE);doc.text("24",M+w1,54);
+  const w2=doc.getTextWidth("24");
+  doc.setTextColor(...NAVY);doc.text(" SOLUTIONS",M+w1+w2,54);
+  doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(...SOFT);
+  doc.text("I N N O V A T I V E   T E C H N O L O G Y   D R I V E N",M,66);
+
+  doc.setFont("helvetica","bold");doc.setFontSize(11);doc.setTextColor(...NAVY);
+  doc.text("Pre-Authorization & Benefits Determination",W-M,52,{align:"right"});
+
+  const pct=v.covPct||((v.copay==="NO"&&v.coins==="NO")?"100%":"");
+  const stamp=pct?`PATIENT RESPONSIBILITY COVERED: ${pct}`:"BENEFITS VERIFIED";
+  doc.setFontSize(7.5);
+  const sw=doc.getTextWidth(stamp)+16;
+  doc.setFillColor(231,245,239);doc.setDrawColor(185,227,210);
+  doc.roundedRect(W-M-sw,58,sw,15,3,3,"FD");
+  doc.setTextColor(14,124,90);doc.text(stamp,W-M-sw/2,68,{align:"center"});
+
+  doc.setDrawColor(...NAVY);doc.setLineWidth(2);doc.line(M,80,W-M,80);
+
+  let y=96;
+  if(v.note){
+    doc.setFillColor(253,240,228);doc.rect(M,y,W-M*2,22,"F");
+    doc.setFillColor(...ORANGE);doc.rect(M,y,3,22,"F");
+    doc.setFont("helvetica","bold");doc.setFontSize(8.5);doc.setTextColor(...INK);
+    doc.text(doc.splitTextToSize(v.note,W-M*2-20),M+10,y+13);
+    y+=32;
+  }
+
+  const name=`${v.lastName||""}${v.lastName&&v.firstName?", ":""}${v.firstName||""}`;
+  const section=(title,rows)=>{
+    doc.setFont("helvetica","bold");doc.setFontSize(7.5);doc.setTextColor(...ORANGE);
+    doc.text(title.toUpperCase(),M,y);
+    doc.setDrawColor(...LINE);doc.setLineWidth(.6);doc.line(M,y+3,W-M,y+3);
+    y+=6;
+    doc.autoTable({
+      startY:y,margin:{left:M,right:M},
+      body:rows,theme:"plain",
+      styles:{fontSize:8,cellPadding:{top:2.6,bottom:2.6,left:0,right:6},textColor:INK,lineWidth:0},
+      columnStyles:{
+        0:{cellWidth:(W-M*2)/4-6,textColor:SOFT},
+        1:{cellWidth:(W-M*2)/4-6,fontStyle:"bold",halign:"left"},
+        2:{cellWidth:(W-M*2)/4-6,textColor:SOFT},
+        3:{cellWidth:(W-M*2)/4-6,fontStyle:"bold",halign:"left"}
+      },
+      didDrawCell:dt=>{
+        if(dt.section==="body"&&dt.column.index===3){
+          doc.setDrawColor(238,242,247);doc.setLineWidth(.4);
+          doc.line(M,dt.cell.y+dt.cell.height,W-M,dt.cell.y+dt.cell.height);
+        }
+      }
+    });
+    y=doc.lastAutoTable.finalY+12;
+  };
+  const R=(a,b,c,e)=>[a,d(b),c||"",c?d(e):""];
+
+  section("Patient",[
+    R("Patient name",name,"Date of birth",fmtDate(v.dob)),
+    R("Verification date",fmtDate(v.today),"Verified by",v.verifiedBy)
+  ]);
+  section("Insurance & plan",[
+    R("Insurance",v.insName,"Payer phone",v.insPhone),
+    R("Policy ID",v.policyId,"Group ID",v.groupId),
+    R("Plan type",v.planType,"Service type",v.serviceType),
+    R("Network status",v.network,"Coverage",v.coverage),
+    R("Effective date",fmtDate(v.effDate),"Termination date",v.termDate),
+    R("Payer ID",v.payerId,"HCA / HRA",v.hra)
+  ]);
+  section("Patient financial responsibility",[
+    R("Co-pay",v.copay,"Co-pay amount",v.copayAmt),
+    R("Co-insurance",v.coins,"Co-insurance %",v.coinsAmt),
+    R("Deductible applies",v.dedApply,"Deductible (individual)",v.dedInd),
+    R("Deductible met",v.dedMet,"Deductible remaining",v.dedRem),
+    R("Out of pocket max",v.oop,"OOP met",v.oopMet),
+    R("OOP remaining",v.oopRem,"Coverage %",v.covPct)
+  ]);
+  section("Visits & authorization",[
+    R("Visit limitation",v.visitLimit,"Visits used",v.visitUsed),
+    R("Auth — initial eval",v.authEval,"Auth — treatment",v.authTx),
+    R("Referral required",v.referral,"PCP referral",v.pcpRef),
+    R("Authorization #",v.authNum,"Auth coverage dates",v.authDates),
+    R("How to obtain auth",v.authHow,"Request window from DOS",v.authWindow)
+  ]);
+  section("Claims & call record",[
+    R("Timely filing — claims",v.tfl,"Timely filing — corrected",v.tflCorr),
+    R("Primary payer",v.primary,"Secondary on file",v.hasSec),
+    R("Insurance rep",v.repName,"Call reference",v.callRef),
+    R("Claim mailing address",v.claimAddr,"","")
+  ]);
+  if(v.hasSec==="YES"){
+    section("Secondary insurance",[
+      R("Insurance",v.secName,"Plan name",v.secPlan),
+      R("Policy ID",v.secPolicy,"Effective date",fmtDate(v.secEff)),
+      R("Deductible",v.secDed,"Visit limit",v.secVisit),
+      R("Used limit",v.secUsed,"","")
+    ]);
+  }
+
+  // Footer on every page
+  const pages=doc.internal.getNumberOfPages();
+  for(let i=1;i<=pages;i++){
+    doc.setPage(i);
+    const H=doc.internal.pageSize.getHeight();
+    doc.setDrawColor(...LINE);doc.setLineWidth(.6);doc.line(M,H-42,W-M,H-42);
+    doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(...SOFT);
+    doc.text("US24 Solutions — Confidential. Benefits quoted are not a guarantee of payment.",M,H-30);
+    doc.text(`Page ${i} of ${pages}`,W-M,H-30,{align:"right"});
+  }
+
+  const fn=`VOB_${(v.lastName||"PATIENT").toUpperCase().replace(/\W+/g,"")}_${(v.insName||"PAYER").toUpperCase().replace(/\W+/g,"")}_${(v.today||new Date().toISOString().slice(0,10)).replace(/-/g,"_")}.pdf`;
+  doc.save(fn);
+  if(!silent)toast("PDF generated");
+  return fn;
+}
+
+/* ---------- Storage ---------- */
+const load=()=>JSON.parse(localStorage.getItem(KEY)||"[]");
+const store=r=>localStorage.setItem(KEY,JSON.stringify(r));
+
+function saveAndGenerate(){
+  if(!validate())return;
+  const fn=makePDF(true);
+  const rec=collect();
+  rec._savedAt=new Date().toLocaleString();
+  rec._file=fn;
+  const r=load();r.unshift(rec);store(r);
+  updateCount();
+  toast("Saved to log and PDF generated");
+}
+function updateCount(){$("recCount").textContent=load().length;}
+
+function renderLog(){
+  const r=load();
+  if(!r.length){
+    $("logArea").innerHTML=`<div class="empty"><h3>No records yet</h3><p>Saved verifications appear here and export straight to Excel.</p></div>`;
+    return;
+  }
+  $("logArea").innerHTML=`<table class="data"><thead><tr>
+    <th>Saved</th><th>Patient</th><th>DOB</th><th>Insurance</th><th>Policy ID</th>
+    <th>Service</th><th>Network</th><th>Auth</th><th>Rep</th><th>Call ref</th><th></th>
+  </tr></thead><tbody>${r.map((v,i)=>`<tr>
+    <td>${v._savedAt||"—"}</td>
+    <td><strong>${d(v.lastName)}, ${d(v.firstName)}</strong></td>
+    <td>${d(fmtDate(v.dob))}</td>
+    <td>${d(v.insName)}</td>
+    <td>${d(v.policyId)}</td>
+    <td>${d(v.serviceType)}</td>
+    <td><span class="pill ${v.network==="IN NETWORK"?"ok":"warn"}">${d(v.network)}</span></td>
+    <td>${d(v.authTx)}</td>
+    <td>${d(v.repName)}</td>
+    <td>${d(v.callRef)}</td>
+    <td style="text-align:right">
+      <button class="btn btn-ghost btn-sm" onclick="reopen(${i})">Open</button>
+      <button class="btn btn-ghost btn-sm" onclick="delRec(${i})">Delete</button>
+    </td></tr>`).join("")}</tbody></table>`;
+}
+function reopen(i){
+  const v=load()[i];
+  F.forEach(k=>{if($(k)&&v[k]!==undefined)$(k).value=v[k];});
+  draw();showTab("form");window.scrollTo({top:0,behavior:"smooth"});
+  toast("Record loaded into the form");
+}
+function delRec(i){
+  const r=load();r.splice(i,1);store(r);renderLog();updateCount();
+  toast("Record deleted");
+}
+function clearAll(){
+  if(!confirm("Delete all saved records? Export to Excel first if you need them."))return;
+  store([]);renderLog();updateCount();toast("All records cleared");
+}
+
+/* ---------- Excel ---------- */
+const HEAD={_savedAt:"Saved At",lastName:"Last Name",firstName:"First Name",dob:"DOB",today:"Verification Date",insName:"Insurance",insPhone:"Payer Phone",policyId:"Policy ID",groupId:"Group ID",planType:"Plan Type",serviceType:"Service Type",network:"Network Status",coverage:"Coverage",effDate:"Effective Date",termDate:"Termination Date",payerId:"Payer ID",hra:"HCA/HRA",copay:"Co-pay",copayAmt:"Co-pay Amount",covPct:"Coverage %",coins:"Co-insurance",coinsAmt:"Co-insurance %",dedApply:"Deductible Applies",dedInd:"Deductible Individual",dedMet:"Deductible Met",dedRem:"Deductible Remaining",oop:"Out of Pocket",oopMet:"OOP Met",oopRem:"OOP Remaining",visitLimit:"Visit Limitation",visitUsed:"Visits Used",authEval:"Auth Initial Eval",authTx:"Auth Treatment",referral:"Referral Required",pcpRef:"PCP Referral",authHow:"How To Obtain Auth",authWindow:"Auth Window From DOS",authNum:"Authorization #",authDates:"Auth Coverage Dates",tfl:"TFL Claims",tflCorr:"TFL Corrected",claimAddr:"Claim Mailing Address",repName:"Insurance Rep",callRef:"Call Reference",verifiedBy:"Verified By",primary:"Primary Payer",hasSec:"Secondary On File",secName:"Secondary Insurance",secPlan:"Secondary Plan",secPolicy:"Secondary Policy ID",secEff:"Secondary Effective Date",secDed:"Secondary Deductible",secVisit:"Secondary Visit Limit",secUsed:"Secondary Used Limit",note:"Additional Info",_file:"PDF File"};
+
+function exportExcel(){
+  const r=load();
+  if(!r.length){toast("No records to export","bad");return;}
+  const keys=Object.keys(HEAD);
+  const rows=r.map(v=>{const o={};keys.forEach(k=>o[HEAD[k]]=v[k]||"");return o;});
+  const ws=XLSX.utils.json_to_sheet(rows,{header:keys.map(k=>HEAD[k])});
+  ws["!cols"]=keys.map(k=>({wch:Math.max(HEAD[k].length+2,14)}));
+  ws["!freeze"]={xSplit:0,ySplit:1};
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"VOB Log");
+  XLSX.writeFile(wb,`US24_VOB_Log_${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast(`Exported ${r.length} record${r.length>1?"s":""} to Excel`);
+}
+
+/* ---------- Misc ---------- */
+function clearForm(){
+  if(!confirm("Clear all fields in this form?"))return;
+  F.forEach(k=>{if($(k))$(k).value="";});
+  $("termDate").value="CURRENT";
+  $("today").value=new Date().toISOString().slice(0,10);
+  draw();toast("Form cleared");
+}
+function loadSample(){
+  const s={lastName:"YUSUFF",firstName:"TAJUDEEN",dob:"1957-12-31",today:new Date().toISOString().slice(0,10),
+  insName:"AETNA",insPhone:"800-624-0756",policyId:"101619535700",groupId:"000003-TX",
+  planType:"HMO AETNA MEDICARE DUAL CARE",serviceType:"PT",network:"IN NETWORK",coverage:"INN BENEFITS WITH AUTH",
+  effDate:"2026-03-01",termDate:"CURRENT",payerId:"60054",hra:"NA",copay:"NO",covPct:"100%",coins:"NO",
+  dedApply:"NO",dedInd:"NA",oop:"NA",visitLimit:"MN (medically necessary)",authEval:"YES",authTx:"YES",
+  referral:"NO",pcpRef:"NO",authHow:"Through Holista portal",tfl:"120 DAYS FROM DOS",tflCorr:"180 DAYS FROM DOS",
+  repName:"CLARK Y",callRef:"358428114",primary:"AETNA",hasSec:"NO",
+  note:"Patient is 100% covered by Aetna as per member's plan."};
+  F.forEach(k=>{if($(k))$(k).value=s[k]||"";});
+  draw();toast("Sample loaded");
+}
+
+$("today").value=new Date().toISOString().slice(0,10);
+updateCount();draw();
+</script>
+</body>
+</html>

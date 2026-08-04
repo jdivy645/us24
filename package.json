@@ -1,0 +1,24 @@
+{
+  "name": "us24-vob-generator",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "test": "node --test \"src/lib/*.test.js\"",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "jspdf": "2.5.1",
+    "jspdf-autotable": "3.8.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "xlsx": "0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}
