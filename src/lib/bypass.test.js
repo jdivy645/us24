@@ -122,11 +122,16 @@ test("a carrier value the rep does state still earns its tick", () => {
 
 // ---------------- backwards compatibility ----------------
 
-test("records saved before _meta verify exactly as before", () => {
+test("records saved before _meta still verify, with no bypasses of their own", () => {
   const before = checkTranscript(SAMPLE, FULL_CALL);
   assert.equal(before.verdict, "APPROVED");
   // "NA" still leaves the checklist entirely on the legacy path
   assert.equal(before.checks.find((c) => c.key === "hra"), undefined);
   assert.deepEqual(before.bypassed, []);
-  assert.deepEqual(before.carrier, []);
+  // The fields we already hold are excused from silence by their class, without
+  // anyone having had to mark them — so a legacy record shows them as carrier
+  // rather than reporting material the call was never going to supply.
+  for (const k of before.carrier) {
+    assert.ok(["payerId", "insPhone", "claimAddr", "tfl", "tflCorr"].includes(k), `unexpected carrier field ${k}`);
+  }
 });

@@ -35,7 +35,7 @@ export default function PrefillBar({ prefill, onLookup, onApply, onClear, onCopy
           </span>
         )}
         <span className="spacer" />
-        {!nothing && <button className="btn btn-dark btn-sm" onClick={onApply}>Fill the blanks</button>}
+        {!nothing && <button className="btn btn-dark btn-sm" onClick={onApply}>Use what&rsquo;s on file</button>}
         <button className="btn btn-ghost btn-sm" onClick={onClear}>Clear prefilled</button>
         {matchedCase && onHistory && <button className="btn btn-ghost btn-sm" onClick={onHistory}>History</button>}
       </div>

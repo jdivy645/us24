@@ -181,13 +181,19 @@ export function applyExtraction(form, meta, decided, { transcript, ranges, by = 
   const keys = Object.keys(decided.fill).filter((k) => !String(form[k] || "").trim());
   for (const k of keys) candidate[k] = decided.fill[k].value;
 
-  let survived = new Set(keys);
-  if (transcript && keys.length) {
-    const probeMeta = Object.fromEntries(keys.map((k) => [k, { source: "call" }]));
-    const r = checkTranscript(candidate, transcript, probeMeta, { ranges });
-    const ok = new Set(r.checks.filter((c) => c.status === "found").map((c) => c.key));
-    survived = new Set(keys.filter((k) => ok.has(k)));
-  }
+  // No transcript, no fill. Skipping the check would write every proposal with
+  // nothing having verified it, which is the one thing this function exists to
+  // prevent.
+  if (!transcript) return { form, meta, filled: [], rejected: keys };
+
+  // Extends the real meta rather than replacing it. Discarding the bypasses and
+  // provenance marks on OTHER fields changes which values count as confirmed,
+  // which feeds the cross-field dedup pass, which could then demote a perfectly
+  // good new fill — non-deterministically, depending on how much was prefilled.
+  const probeMeta = { ...meta, ...Object.fromEntries(keys.map((k) => [k, { ...meta[k], source: "call" }])) };
+  const r = keys.length ? checkTranscript(candidate, transcript, probeMeta, { ranges }) : { checks: [] };
+  const ok = new Set(r.checks.filter((c) => c.status === "found").map((c) => c.key));
+  const survived = new Set(keys.filter((k) => ok.has(k)));
 
   const nextForm = { ...form }, nextMeta = { ...meta };
   const filled = [], rejected = [];

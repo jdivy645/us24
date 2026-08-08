@@ -16,7 +16,7 @@ import { normalizeMeta, setBypass, clearBypass, setAck, bypassSummary, bypassedK
 import { fieldStates, blockingCount } from "./lib/fieldState.js";
 import { getPrep } from "./lib/verify.js";
 import { extractFromTranscript, agentOnlyObservations } from "./lib/extract.js";
-import { decide, applyExtraction, useSuggestion, acceptFields, rejectField, clearAutofilled, unreviewedKeys } from "./lib/autofill.js";
+import { decide, applyExtraction, useSuggestion, acceptFields, rejectField, clearAutofilled } from "./lib/autofill.js";
 import ReviewGate from "./components/ReviewGate.jsx";
 import PrefillBar from "./components/PrefillBar.jsx";
 import CaseHistory from "./components/CaseHistory.jsx";
@@ -29,7 +29,9 @@ import CallMediaPanel from "./components/CallMediaPanel.jsx";
 import VerifyPanel from "./components/VerifyPanel.jsx";
 import TranscriptView from "./components/TranscriptView.jsx";
 
-const VERDICT_PILL = { APPROVED: "ok", REJECTED: "bad" };
+// ATTESTED is a positive verdict — values came from the call and a human signed
+// for them. Left out of this map it rendered grey, identical to NO TRANSCRIPT.
+const VERDICT_PILL = { APPROVED: "ok", ATTESTED: "ok", REJECTED: "bad", UNVERIFIED: "warn" };
 const NO_UPLOAD = { transcript: "", transcriptName: "" };
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 
@@ -108,12 +110,12 @@ export default function App() {
     [settled, transcript, meta, parsed]);
   const comp = useMemo(() => checkCompleteness(collect(settled), meta), [settled, meta]);
 
-  // Auto-fill is refused outright on a transcript with no identified rep.
-  // Verification degrades safely without speaker labels because the operator typed
-  // the values; extraction does not, because there is no independent human
-  // statement to fall back on — our own agent's read-backs would be promoted
-  // straight into the form.
-  const canRead = !!parsed && parsed.speakers.some((s) => s.role === "rep");
+  // Can anything in this call be traced to the payer rather than to us? Values are
+  // read out of an unattributed transcript anyway — refusing outright helps
+  // nobody, and every filled value already has to be signed for before the record
+  // saves — but the operator is told, because a figure here could be their own
+  // words read back.
+  const attributed = !!parsed && parsed.attributed;
 
   const states = useMemo(
     () => fieldStates(collect(settled), meta, liveResult, comp,
@@ -131,13 +133,11 @@ export default function App() {
 
   /* ------------------------------------------------- reading the call ---- */
 
-  // A dry run first: extraction executes and reports, but writes nothing. The
-  // operator sees what it found before any of it lands in the form.
   const runExtraction = (currentForm, currentMeta) => {
-    if (!canRead) return null;
+    if (!parsed || !transcript) return null;
     const prep = getPrep(transcript);
     const x = extractFromTranscript(prep, { ranges: parsed.ranges });
-    const d = decide(x, prep, { form: currentForm, meta: currentMeta });
+    const d = decide(x, prep, { form: currentForm });
 
     // Where our records and the call disagree, neither wins on its own. This is
     // the finding the app exists for — carrier says 90-day filing, rep says 180.
@@ -149,26 +149,46 @@ export default function App() {
       if (onFile.toUpperCase() === String(p.value).toUpperCase()) continue;
       conflict[k] = { onFile, call: p.value, quote: p.quote };
     }
-    return { ...d, conflict, agentOnly: agentOnlyObservations(prep, parsed.ranges), prep };
+    // `prep` is deliberately not returned — keeping it would pin the whole
+    // tokenised transcript, plus its memoised candidate and anchor tables, in
+    // React state for the session.
+    return { ...d, conflict, agentOnly: agentOnlyObservations(prep, parsed.ranges), attributed };
   };
 
-  const handleReadCall = () => {
+  // Reading the call and filling the form are one action, and it happens by
+  // itself. Making the operator press two buttons to get what they attached the
+  // transcript for is the whole complaint this replaces.
+  //
+  // applyExtraction never overwrites a non-blank field, so this can never take a
+  // value out of someone's hands — but it must still not re-run while they type,
+  // which is why the trigger is the transcript text rather than `parsed` (that
+  // object is rebuilt whenever insName or verifiedBy changes).
+  const readAndFill = (announce = true) => {
     const d = runExtraction(v, meta);
-    if (!d) { toast("This transcript has no identified rep — label the speakers first", "bad"); return; }
     setReadCall(d);
-    const n = d.counts.fill + d.counts.suggest;
-    toast(n ? `Read the call — ${d.counts.fill} to fill, ${d.counts.suggest} to consider` : "Nothing in this call could be read into the form", n ? "good" : "warn");
-  };
-
-  const handleApplyRead = () => {
-    if (!readCall) return;
-    const out = applyExtraction(form, meta, readCall, { transcript, ranges: parsed?.ranges, by: v.verifiedBy });
+    if (!d) return null;
+    const out = applyExtraction(form, meta, d, { transcript, ranges: parsed.ranges, by: v.verifiedBy });
     setForm(out.form);
     setMeta(out.meta);
-    const tail = out.rejected.length ? ` · ${out.rejected.length} could not be re-verified and were left out` : "";
-    toast(`Filled ${out.filled.length} field(s) from the call — check them before saving${tail}`,
-      out.rejected.length ? "warn" : "good");
+    if (announce) {
+      const bits = [
+        out.filled.length ? `Filled ${out.filled.length} field(s) from the call` : "Nothing in this call could be filled in",
+        d.counts.suggest ? `${d.counts.suggest} to consider` : "",
+        out.rejected.length ? `${out.rejected.length} could not be re-verified and were left out` : "",
+        !attributed ? "no speakers in this transcript — check these carefully" : "",
+      ].filter(Boolean);
+      toast(bits.join(" · "), out.filled.length && attributed ? "good" : "warn");
+    }
+    return out;
   };
+
+  const autoRef = useRef("");
+  useEffect(() => {
+    const key = transcript + "|" + JSON.stringify(roles);
+    if (!transcript || autoRef.current === key) return;
+    autoRef.current = key;
+    readAndFill();
+  }, [transcript, roles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAccept = (keys) => {
     setMeta((m) => acceptFields(m, keys, v.verifiedBy));
@@ -202,10 +222,18 @@ export default function App() {
     toast(`${HEAD[p.key]} set from the call`);
   };
 
+  // Scroll the transcript box to the words the value came from, rather than
+  // dropping the operator at the top of a two-hour call.
   const handleShowInCall = (s) => {
-    setUpload((u) => u);   // no state change; the transcript panel scrolls itself
-    const el = document.getElementById("call-transcript");
-    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const box = document.getElementById("call-transcript");
+    if (!box) return;
+    box.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (s?.quote) {
+      const at = transcript.indexOf(String(s.quote).replace(/^…|…$/g, "").slice(0, 40));
+      if (at >= 0) box.scrollTop = Math.max(0, (at / transcript.length) * box.scrollHeight - box.clientHeight / 2);
+    }
+    box.classList.add("flash");
+    setTimeout(() => box.classList.remove("flash"), 1200);
   };
 
   const handleBypass = (k, reason) => setMeta((m) => setBypass(m, k, reason, "", v.verifiedBy));
@@ -276,6 +304,7 @@ export default function App() {
     } else {
       setUpload({ transcript: first.text, transcriptName: first.name });
       setRoles({});
+      setReadCall(null);
       if (rest.length) setQueue((q) => [...q, ...rest]);
       toast(rest.length ? `Verifying ${first.name} — ${rest.length} queued` : `Transcript attached: ${first.name}`);
     }
@@ -287,6 +316,7 @@ export default function App() {
     setQueue((q) => q.filter((_, k) => k !== i));
     setUpload({ transcript: picked.text, transcriptName: picked.name });
     setRoles({});
+    setReadCall(null);
     toast(`Now verifying ${picked.name}`);
   };
 
@@ -309,6 +339,7 @@ export default function App() {
     if (!t) { toast("Nothing pasted", "bad"); return; }
     setUpload({ transcript: t, transcriptName: "" });
     setRoles({});
+    setReadCall(null);
     toast("Transcript attached");
   };
 
@@ -393,6 +424,8 @@ export default function App() {
       setMeta({});
       setRoles({});
       setPrefill(null);
+      setReadCall(null);
+      autoRef.current = "";
       // Pull the next queued transcript forward so a batch keeps moving.
       const [next, ...rest] = queue;
       if (next) {
@@ -532,6 +565,12 @@ export default function App() {
     setViewText(await db.getTranscript(records[i]._id));
   };
 
+  // Re-parsed so the modal's checklist and highlighting use the same speaker
+  // attribution the verdict was reached with.
+  const viewParsed = useMemo(
+    () => (viewText ? parseTranscript(viewText, { insName: viewRec?.insName, verifiedBy: viewRec?.verifiedBy }) : null),
+    [viewText]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <>
       <div className="topbar">
@@ -570,14 +609,13 @@ export default function App() {
               queue={queue}
               onTranscriptFiles={handleTranscriptFiles}
               onPaste={handlePaste}
-              onClearTranscript={() => { setUpload(NO_UPLOAD); setRoles({}); }}
+              onClearTranscript={() => { setUpload(NO_UPLOAD); setRoles({}); setReadCall(null); autoRef.current = ""; }}
               onDownloadText={handleDownloadText}
               onPickQueued={handlePickQueued}
               onSetRole={handleSetRole}
-              canRead={canRead}
+              attributed={attributed}
               readCall={readCall}
-              onReadCall={handleReadCall}
-              onApplyRead={handleApplyRead}
+              onReadCall={() => readAndFill()}
               onClearRead={handleClearAllRead}
               onUseSuggestion={handleUseSuggestion}
             />
@@ -669,7 +707,7 @@ export default function App() {
                 )}
                 <button
                   className="btn btn-ghost btn-sm"
-                  onClick={() => downloadTranscriptTxt(viewRec, viewText, checkTranscript(viewRec, viewText, viewRec._meta))}
+                  onClick={() => downloadTranscriptTxt(viewRec, viewText, checkTranscript(viewRec, viewText, viewRec._meta, { ranges: viewParsed?.ranges }))}
                 >
                   Download .txt
                 </button>
@@ -677,7 +715,7 @@ export default function App() {
               </div>
             </div>
             <div className="card-body">
-              <TranscriptView v={viewRec} transcript={viewText} meta={viewRec._meta} />
+              <TranscriptView v={viewRec} transcript={viewText} meta={viewRec._meta} ranges={viewParsed?.ranges} />
             </div>
           </div>
         </div>

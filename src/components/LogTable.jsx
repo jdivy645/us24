@@ -4,7 +4,7 @@ import { recordCompleteness } from "../lib/completeness.js";
 // Green means one thing: complete form, everything confirmed.
 const verdictClass = (v, incomplete) =>
   v._verdict === "REJECTED" ? "bad"
-    : v._verdict === "APPROVED" ? (incomplete ? "warn" : "ok")
+    : v._verdict === "APPROVED" || v._verdict === "ATTESTED" ? (incomplete ? "warn" : "ok")
       : "na";
 
 export default function LogTable({ records, onOpen, onDelete, onTranscript, onAudio, onHistory }) {

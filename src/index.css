@@ -280,6 +280,10 @@ input.flash,select.flash,textarea.flash{outline:2px solid var(--accent);outline-
 /* ---------- Verification ---------- */
 mark.hl{background:var(--ok-bg);color:var(--ok);border-radius:3px;padding:0 2px;font-weight:700}
 mark.hl.bad{background:#FBEAE7;color:#C0392B}
+mark.hl.auto{background:#EAF2FB;color:#2C6FB8;border-bottom:1.5px solid #2C6FB8}
+.pill.auto{background:#EAF2FB;color:#2C6FB8;border-color:#BFD8F2}
+.vitem.auto .tick{color:#2C6FB8}
+.vitem.ok .tick{color:var(--ok)}
 .pill-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .vgap{background:var(--warn-bg);border:1px solid #F2D5B4;border-radius:7px;padding:10px 12px;margin-bottom:12px}
 .vgap-head{font-size:10.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#B25E12;margin-bottom:8px}

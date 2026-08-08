@@ -125,11 +125,30 @@ test("GOLDEN never-spoken carrier fields produce no false failures", () => {
   assert.ok(!r.missing.includes("termDate"));
 });
 
-test("GOLDEN without provenance those same fields would sink the record", () => {
+test("GOLDEN the fields we already hold never sink the record, marker or not", () => {
+  // The red class on the client's template. Payer ID, filing limits, claim
+  // address and payer phone come from our own records; the rep is never asked to
+  // read them out, so their silence is not a defect. This holds with no meta at
+  // all — the operator should not have to mark anything for it to be true.
   const r = run(FILLED, {});
-  for (const k of ["payerId", "planType"]) {
-    assert.ok(r.missing.includes(k), `${k} is unheard, and without provenance that is a failure`);
+  for (const k of ["payerId", "insPhone"]) {
+    assert.equal(st(r, k), "carrier", k);
+    assert.ok(!r.missing.includes(k), `${k} must never count as missing from the call`);
   }
+  // A green field the rep genuinely should have given still fails.
+  assert.ok(r.missing.includes("planType"), "plan type is asked on the call, and it was not given");
+  // And the class excuses silence, never a contradiction: the filing limit is red
+  // too, and the rep saying 180 against our 90 still rejects the record.
+  assert.equal(st(r, "tfl"), "mismatch");
+  assert.ok(r.mismatched.includes("tfl"));
+});
+
+test("GOLDEN the patient's identity is still checked, even though we hold it too", () => {
+  // A form that says ROBINSON when nobody in the call said ROBINSON is the worst
+  // failure this product can have. It is red on the template and still fails.
+  const r = run({ ...FILLED, lastName: "ROBINSON" }, META);
+  assert.equal(st(r, "lastName"), "missing");
+  assert.equal(r.verdict, "REJECTED");
 });
 
 // ---------------- what the call did establish ----------------

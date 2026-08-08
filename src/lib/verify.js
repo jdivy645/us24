@@ -18,6 +18,7 @@
 import { ANCHORS, HEAD_IX, OWN_Q, SIB_Q, MTYPE, TOPIC_TOKENS, FAMILY, KEYWORDS, KEYWORD_WINDOW } from "./anchors.js";
 import { isBypassed, bypassOf, isCarrier, isMachineRead, isAttested } from "./bypass.js";
 import { roleAt } from "./transcriptParse.js";
+import { isOnFile } from "./schema.js";
 
 // A verifier's most common move is to read a value back for confirmation:
 // "the member has a 20% coinsurance, right?" — and the rep answers "30%. Yes."
@@ -122,6 +123,10 @@ export const VERIFY_FIELDS = [
   // and `note` is generated from the other fields. Their absence here is a
   // decision, not an oversight.
 ];
+
+// Who the member is. The provider supplies these, so agent-side speech confirms
+// them — but their absence is never excused.
+const IDENTITY_KEYS = new Set(VERIFY_FIELDS.filter((f) => f.identity).map((f) => f.key));
 
 const norm = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 // Values that answer a field by saying it does not apply. Nothing to check them
@@ -951,13 +956,32 @@ function anchorSites(prep, ranges) {
     if (q < 0 || !sitesByTurn.has(q) || ranges[q].role === "rep") continue;
     const at = firstTok.get(t);
     if (at == null) continue;
-    // Only an unambiguous question hands its subject on. "What is the individual
-    // deductible and individual out of pocket?" names two topics, and a single
-    // "$3,000" answer belongs to one of them — inheriting both would let the
-    // deductible figure contradict the out-of-pocket field.
+    // Only an unambiguous question hands its subject on — and the test is one
+    // TOPIC, not one field. "What is the individual deductible and individual out
+    // of pocket?" names two topics, and a single "$3,000" answer belongs to one of
+    // them; inheriting both would let the deductible figure contradict the
+    // out-of-pocket field. But "what is the out of pocket individual?" names one
+    // topic that happens to cover three fields — the maximum, the met and the
+    // remaining all anchor on the same phrase — and the qualifier rules already
+    // exist to tell those apart once the value is in reach. Counting keys rather
+    // than topics blocked the second case along with the first, which is why the
+    // out-of-pocket figures never extracted.
     const asked = sitesByTurn.get(q);
     const keys = new Set(asked.flatMap((s) => [...s.keys]));
-    if (keys.size !== 1) continue;
+    const topics = new Set([...keys].map((k) => (ANCHORS[k] && ANCHORS[k].g) || k));
+    if (topics.size !== 1) continue;
+
+    // And the answer has to be a simple one. The projected anchor sits at the
+    // front of the reply, so every figure in it is "near" the subject and the
+    // first one wins — which on a reply like "6, uh 6,500 and remaining is
+    // 5,473.76" means a stutter becomes the out-of-pocket maximum. One candidate
+    // in the turn, or the reply carries its own anchors and needs no help.
+    const fam = FAMILY[MTYPE.get([...keys][0])];
+    const { nums, runs, dates } = scanCands(prep);
+    const pool = fam === "id" ? runs : fam === "date" ? dates : nums;
+    const inTurn = pool.filter((c) => c.s >= ranges[t].start && c.e <= ranges[t].end);
+    if (inTurn.length !== 1) continue;
+
     extra.push({ i: at, j: at, keys, text: asked[0].text, inherited: true });
   }
 
@@ -1478,10 +1502,22 @@ export function checkTranscript(v, transcript, meta, opts = {}) {
     // This runs AFTER the mismatch pass on purpose: provenance excuses silence,
     // never a contradiction. A carrier record saying the filing limit is 90 days
     // when the rep says 180 is the single most valuable thing this engine finds.
+    //
+    // The administrative half of the `onFile` class gets the same treatment
+    // without needing a marker: payer ID, payer phone, claim address, filing
+    // limits. Those are the red fields on the client's template — we already hold
+    // them, nobody asks the rep to read them out, and reporting them as unheard
+    // turned every record into a REJECTED over material that was never the call's
+    // to supply.
+    //
+    // The identity fields are pointedly NOT included, even though they are red
+    // too. A form that says ROBINSON when nobody in the call ever said ROBINSON is
+    // the worst failure this product can have, and it has to keep failing.
     for (const c of checks) {
-      if ((c.status === "missing" || c.status === "elsewhere" || c.status === "echo") && isCarrier(meta, c.key)) {
+      if ((c.status === "missing" || c.status === "elsewhere" || c.status === "echo")
+        && (isCarrier(meta, c.key) || (isOnFile(c.key) && !IDENTITY_KEYS.has(c.key)))) {
         c.status = "carrier";
-        c.source = (meta[c.key] || {}).source;
+        c.source = ((meta && meta[c.key]) || {}).source || "onFile";
       }
     }
 
@@ -1593,6 +1629,11 @@ export function spansFromChecks(checks) {
   const all = [];
   for (const c of checks) {
     if (c.status === "found") for (const s of c.spans) all.push({ ...s, label: c.label, kind: "ok" });
+    // Values read out of the call are highlighted too, in their own colour — the
+    // operator checking them needs to see where each one came from.
+    if (c.status === "autofill" || c.status === "attested") {
+      for (const s of c.spans) all.push({ ...s, label: c.label, kind: "auto" });
+    }
     if (c.status === "mismatch") for (const s of c.heardSpans || []) all.push({ ...s, label: c.label, kind: "bad", value: c.value, heard: c.heard });
     // The rival value in a self-contradiction is painted too, so "thirty percent"
     // is visible in the transcript next to the confirmed "twenty percent".

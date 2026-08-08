@@ -21,7 +21,7 @@ const jumpTo = (key) => {
 
 export default function CallMediaPanel({
   upload, parsed, queue, onTranscriptFiles, onPaste, onClearTranscript, onDownloadText,
-  onPickQueued, onSetRole, canRead, readCall, onReadCall, onApplyRead, onClearRead, onUseSuggestion,
+  onPickQueued, onSetRole, attributed, readCall, onReadCall, onClearRead, onUseSuggestion,
 }) {
   const boxRef = useRef(null);
   const [pasting, setPasting] = useState(false);
@@ -136,27 +136,27 @@ export default function CallMediaPanel({
             )}
             {parsed.warnings.map((w) => <p key={w} className="hint warn-text">{w}</p>)}
 
-            {/* Auto-fill is opt-in per call, and refused outright without an
-                identified rep — otherwise our own agent's read-backs would be
-                promoted into the form. */}
+            {/* The call is read and the form filled the moment a transcript is
+                attached. This row reports what happened; it is not a control. */}
             <div className="ps-row" style={{ marginTop: 4 }}>
               <span className="ps-k">Auto-fill</span>
-              {!canRead ? (
-                <span className="hint warn-text">
-                  Off for this transcript — there is no way to tell the rep's words from ours. Set a speaker to “insurance rep” above to turn it on.
-                </span>
-              ) : !readCall ? (
-                <>
-                  <button className="btn btn-dark btn-sm" onClick={onReadCall}>Read this call</button>
-                  <span className="hint">Nothing is written until you look at what it found.</span>
-                </>
+              {!readCall ? (
+                <span className="hint">Reading the call…</span>
               ) : (
                 <>
-                  <span className="pf-chip">{readCall.counts.fill} to fill · {readCall.counts.suggest} to consider</span>
-                  {readCall.counts.fill > 0 && <button className="btn btn-dark btn-sm" onClick={onApplyRead}>Fill the blanks</button>}
+                  <span className="pf-chip">
+                    {readCall.counts.fill} filled
+                    {readCall.counts.suggest ? ` · ${readCall.counts.suggest} to consider` : ""}
+                    {readCall.counts.contested + readCall.counts.blocked ? ` · ${readCall.counts.contested + readCall.counts.blocked} left for you` : ""}
+                  </span>
                   <button className="btn btn-ghost btn-sm" onClick={onReadCall}>Read again</button>
                   <button className="btn btn-ghost btn-sm" onClick={onClearRead}>Clear what it wrote</button>
                 </>
+              )}
+              {!attributed && (
+                <span className="hint warn-text">
+                  Nobody in this transcript is identified as the payer — a value read from it could be something our own side said. Check each one.
+                </span>
               )}
             </div>
           </div>
@@ -165,7 +165,7 @@ export default function CallMediaPanel({
         {/* Everything the engine noticed, including where it filled nothing.
             Absence of a fill is not absence of information, and an operator who
             trusts a blank is the failure mode with no local signal. */}
-        {readCall && (
+        {parsed && readCall && (
           <div className="parse-sum" style={{ marginTop: 8 }}>
             <div className="rg-head">
               Pulled from this call <span className="count">{readCall.counts.fill + readCall.counts.suggest}</span>
@@ -186,12 +186,15 @@ export default function CallMediaPanel({
                   <span className="count">{readCall.counts.contested + readCall.counts.blocked + Object.keys(readCall.agentOnly || {}).length}</span>
                   <span className="rg-hint">Noticed, deliberately not written in.</span>
                 </div>
+                {/* No one-click "Use it" here. These were held back BECAUSE
+                    something did not add up — accepting one from this list would
+                    land it pre-signed and it would never reach the review gate. */}
                 {Object.values({ ...readCall.contested, ...readCall.blocked }).map((p) => (
                   <div key={p.key} className="pull-row">
                     <span className="pull-k">{HEAD[p.key] || p.key}</span>
                     <b>{p.value}</b>
                     <span className="hint warn-text">{p.why}</span>
-                    <button className="btn btn-ghost btn-xs" onClick={() => onUseSuggestion(p)}>Use it</button>
+                    <button className="btn btn-ghost btn-xs" onClick={() => jumpTo(p.key)}>→ field</button>
                   </div>
                 ))}
                 {Object.values(readCall.agentOnly || {}).map((p) => (

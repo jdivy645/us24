@@ -1,17 +1,28 @@
 import { Checklist } from "./TranscriptView.jsx";
 
-const ORDER = { mismatch: 0, missing: 1, found: 2, quiet: 3 };
+// What the operator most needs to act on, first. Every status needs an entry —
+// a missing one yields NaN and the sort silently becomes arbitrary for exactly
+// the rows that matter. display.test.js pins this.
+const ORDER = {
+  mismatch: 0, autofill: 1, echo: 2, missing: 3, elsewhere: 3,
+  attested: 4, found: 5, carrier: 6, bypassed: 7, quiet: 8,
+};
 
 export default function VerifyPanel({ result, comp, hasTranscript }) {
-  const { checks, matched, total, mismatched } = result;
+  const { checks, matched, total, mismatched, attested = [], autofilled = [] } = result;
   const sorted = [...checks].sort((a, b) =>
-    (a.soft ? 9 : ORDER[a.status]) - (b.soft ? 9 : ORDER[b.status]));
+    (a.soft ? 9 : ORDER[a.status] ?? 9) - (b.soft ? 9 : ORDER[b.status] ?? 9));
+
+  // Machine-read values are counted, not dropped. Reporting "0/9 HEARD" straight
+  // after a perfect nine-field fill told the operator it had failed.
+  const machine = attested.length + autofilled.length;
 
   let pill;
   if (mismatched.length) pill = <span className="pill bad">{mismatched.length} CONTRADICTED</span>;
   else if (!hasTranscript) pill = <span className="pill na">NO TRANSCRIPT</span>;
-  else if (total > 0 && matched === total) pill = <span className="pill ok">ALL HEARD {matched}/{total}</span>;
-  else pill = <span className="pill warn">{matched}/{total} HEARD</span>;
+  else if (autofilled.length) pill = <span className="pill warn">{autofilled.length} TO CHECK</span>;
+  else if (total > 0 && matched + machine === total) pill = <span className="pill ok">ALL CONFIRMED {total}</span>;
+  else pill = <span className="pill warn">{matched + machine}/{total} CONFIRMED</span>;
 
   return (
     <div className="card" style={{ marginBottom: 14 }}>
@@ -24,6 +35,7 @@ export default function VerifyPanel({ result, comp, hasTranscript }) {
           {comp.incomplete
             ? <span className="pill warn">FORM {comp.answered}/{comp.required}</span>
             : <span className="pill ok">FORM COMPLETE</span>}
+          {machine > 0 && <span className="pill auto" title="Read from the call rather than typed">{machine} FROM CALL</span>}
           {pill}
         </div>
       </div>

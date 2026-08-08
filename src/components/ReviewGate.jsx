@@ -79,6 +79,8 @@ export default function ReviewGate({ states, onUse, onKeep, onBypass, onAccept, 
   const blockers = blockingCount(states);
   const exceptions = [...states.values()].filter((s) => s.acked || s.kind === "bypassed").length;
   const attested = [...states.values()].filter((s) => s.kind === "attested").length;
+  const machineRead = [...states.values()].filter((s) => s.kind === "autofill").length;
+  const other = blockers - machineRead;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -86,7 +88,17 @@ export default function ReviewGate({ states, onUse, onKeep, onBypass, onAccept, 
         <div className="card-head">
           <div>
             <h2>Review before saving</h2>
-            <p>{blockers ? `${blockers} item${blockers > 1 ? "s" : ""} still need${blockers > 1 ? "" : "s"} a decision.` : "Nothing left to resolve."}</p>
+            {/* The gate only opens BECAUSE something is blocking, so its save
+                button is always disabled on arrival. Saying which rows are at
+                fault is the difference between a checklist and a dead end. */}
+            <p>
+              {blockers
+                ? [
+                  machineRead ? `${machineRead} value${machineRead > 1 ? "s were" : " was"} read from the call and nobody has checked ${machineRead > 1 ? "them" : "it"} yet` : "",
+                  other ? `${other} other item${other > 1 ? "s need" : " needs"} a decision` : "",
+                ].filter(Boolean).join(" · ") + ". Accept what looks right, or clear what doesn't."
+                : "Nothing left to resolve."}
+            </p>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>Close</button>
         </div>

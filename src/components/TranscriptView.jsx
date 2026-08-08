@@ -1,27 +1,47 @@
 import { checkTranscript, spansFromChecks } from "../lib/verify.js";
 import { dash } from "../data/fields.js";
 
-const TICK = { found: "✓", mismatch: "≠", missing: "✗", elsewhere: "✗", quiet: "·" };
+// Every status checkTranscript can emit needs a glyph and a class here. When one
+// is missing it falls through to a red ✗ — which is how a perfect nine-field
+// auto-fill came to display as nine failures. display.test.js pins this.
+const TICK = {
+  found: "✓", attested: "✓", autofill: "◆", carrier: "†", bypassed: "—",
+  echo: "↩", mismatch: "≠", missing: "✗", elsewhere: "✗", quiet: "·",
+};
+
+const ROW = {
+  found: "", attested: "ok", autofill: "auto", carrier: "quiet", bypassed: "quiet",
+  echo: "miss", mismatch: "bad", missing: "miss", elsewhere: "miss", quiet: "quiet",
+};
+
+const NOTE = {
+  autofill: "read from the call — not checked yet",
+  attested: "read from the call, accepted",
+  carrier: "from our records, not this call",
+  bypassed: "bypassed",
+  echo: "our side said it, the rep did not",
+  elsewhere: "not said about this field",
+};
 
 export function Checklist({ checks }) {
   if (!checks.length) return <p className="hint">No filled fields to verify yet.</p>;
   return (
     <div className="vlist">
       {checks.map((c) => (
-        <div key={c.key} className={"vitem" + (c.status === "missing" || c.status === "elsewhere" ? " miss" : "") + (c.status === "mismatch" ? " bad" : "") + (c.status === "quiet" ? " quiet" : "") + (c.soft ? " soft" : "")}>
+        <div key={c.key} className={"vitem " + (ROW[c.status] || "miss") + (c.soft ? " soft" : "")}>
           <span className="tick">{TICK[c.status] || "✗"}</span>
           <span className="vlabel">{c.label}</span>
           <span className="vval">{dash(c.value)}</span>
           {c.status === "mismatch" && <span className="vheard">call says “{c.heard}”</span>}
-          {c.status === "elsewhere" && <span className="vheard">not said about this field</span>}
+          {NOTE[c.status] && <span className="vheard">{NOTE[c.status]}</span>}
         </div>
       ))}
     </div>
   );
 }
 
-export default function TranscriptView({ v, transcript, result, meta }) {
-  const res = result || checkTranscript(v, transcript, meta);
+export default function TranscriptView({ v, transcript, result, meta, ranges }) {
+  const res = result || checkTranscript(v, transcript, meta, { ranges });
   const spans = spansFromChecks(res.checks);
   const parts = [];
   let pos = 0;
