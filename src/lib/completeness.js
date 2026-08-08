@@ -1,6 +1,13 @@
 // Form completeness — a pure function of the typed values, never of the transcript.
-// Deliberately independent of verify.js: SKIP decides what can be checked against
-// audio, this decides what the manager still has to ask.
+// Deliberately independent of verify.js's SKIP set: that decides what can be
+// checked against the call, this decides what the manager still has to ask.
+//
+// The two used to disagree in a way that mattered. verify.js dropped "NA" from the
+// checklist entirely while this counted it as answered, so a field typed "NA" was
+// both complete and unverified with nothing recorded. Both now consult
+// isBypassed(), and normalizeMeta() promotes a typed "NA" to a real bypass at save
+// — so the field still counts as answered, but the reason is on the record.
+import { isBypassed } from "./bypass.js";
 
 // "NA" is an ANSWER (the rep said there is no deductible), not a blank. Only these
 // count as unanswered.
@@ -39,13 +46,15 @@ export const MANDATORY_FIELDS = [
   { key: "secPolicy", label: "Secondary policy ID", when: sec },
 ];
 
-export function checkCompleteness(v) {
+export function checkCompleteness(v, meta) {
   const required = MANDATORY_FIELDS.filter((f) => !f.when || f.when(v));
-  const blank = required.filter((f) => !isAnswered(v[f.key]));
+  const blank = required.filter((f) => !isAnswered(v[f.key]) && !isBypassed(meta, f.key));
   return {
     required: required.length,
+    requiredKeys: required.map((f) => f.key),
     answered: required.length - blank.length,
     blank,
+    bypassed: required.filter((f) => isBypassed(meta, f.key)).map((f) => f.key),
     incomplete: blank.length > 0,
   };
 }
@@ -59,6 +68,6 @@ export function recordCompleteness(rec) {
     return { blank: rec._blank, count: rec._blank.length, required: rec._required || 0, incomplete: rec._blank.length > 0 };
   }
   if (!LEGACY_RECOMPUTE) return { blank: [], count: 0, required: 0, incomplete: false };
-  const c = checkCompleteness(rec);
+  const c = checkCompleteness(rec, rec._meta);
   return { blank: c.blank.map((f) => f.label), count: c.blank.length, required: c.required, incomplete: c.incomplete };
 }

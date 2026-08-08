@@ -1,69 +1,63 @@
 import { useEffect, useRef, useState } from "react";
 
-const mmss = (s) => `${String((s / 60) | 0).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+// Call recordings are transcribed upstream (RingCentral/RingSense, or the payer
+// portal) and the transcript is what reaches this app. Accept the text formats
+// those exports actually produce; parsing happens in lib/transcriptParse.js.
+const TRANSCRIPT_ACCEPT = ".txt,.text,.log,.vtt,.srt,text/plain,text/vtt";
 
-// Windows resolves audio/* through registry MIME associations, so .m4a/.opus/.aac
-// and friends vanish from the file dialog. List extensions explicitly too.
-const AUDIO_ACCEPT = "audio/*,video/*,.mp3,.m4a,.wav,.webm,.ogg,.oga,.opus,.aac,.amr,.wma,.flac,.mp4,.3gp,.m4b,.caf";
+const ROLE_LABEL = { rep: "insurance rep", agent: "our side", ivr: "phone menu", unknown: "unidentified" };
+const FORMAT_LABEL = { ringcentral: "RingCentral export", vtt: "captions (VTT/SRT)", labelled: "speaker-labelled", plain: "plain text" };
 
-export default function CallMediaPanel({ tr, upload, onAudioFile, onTranscriptFile, onPaste, onClearAudio, onClearTranscript, onTranscribed, onDownloadText }) {
+export default function CallMediaPanel({ upload, parsed, queue, onTranscriptFiles, onPaste, onClearTranscript, onDownloadText, onPickQueued, onSetRole }) {
   const boxRef = useRef(null);
-  const audioRef = useRef(null);
-  const [url, setUrl] = useState("");
   const [pasting, setPasting] = useState(false);
   const [draft, setDraft] = useState("");
+  const [dragging, setDragging] = useState(false);
 
+  const shown = upload.transcript;
   useEffect(() => {
-    if (!upload.blob) { setUrl(""); return; }
-    const u = URL.createObjectURL(upload.blob);
-    setUrl(u);
-    return () => URL.revokeObjectURL(u);
-  }, [upload.blob]);
-
-  const shown = upload.transcript || tr.text;
-  useEffect(() => {
-    if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
+    if (boxRef.current) boxRef.current.scrollTop = 0;
   }, [shown]);
 
-  const pickFile = (handler) => (e) => {
-    const file = e.target.files?.[0];
-    if (file) handler(file);
+  const pickFile = (e) => {
+    const files = [...(e.target.files || [])];
+    if (files.length) onTranscriptFiles(files);
     e.target.value = ""; // allow re-picking the same file
   };
 
-  const stage =
-    tr.status === "decoding" ? "Reading the audio file…"
-      : tr.status === "loading" ? `Loading the speech model ${tr.pct}%${tr.device === "wasm" ? " (no GPU — this will be slower)" : ""}`
-        : tr.status === "running" ? `Transcribing ${mmss(tr.seconds)} of ${mmss(tr.duration)}${tr.device === "wasm" ? " (no GPU — slower)" : ""}`
-          : "";
-
-  const source = upload.transcript
-    ? (upload.transcriptName ? `Using transcript file: ${upload.transcriptName}` : "Using the pasted transcript")
-    : tr.status === "done" && tr.text ? "Transcribed from the uploaded audio"
-      : "";
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    const files = [...(e.dataTransfer.files || [])];
+    if (files.length) onTranscriptFiles(files);
+  };
 
   return (
     <div className="card" style={{ marginBottom: 14 }}>
       <div className="card-head">
         <div>
-          <h2>Call audio &amp; transcript</h2>
-          <p>Attach the call recording. A transcript is written only if you don't provide one.</p>
+          <h2>Call transcript</h2>
+          <p>Attach the transcript of the benefits call. Every typed value is checked against it.</p>
         </div>
-        {tr.status === "done" && tr.text && <span className="pill ok">Transcribed</span>}
+        {shown && <span className="pill ok">Attached</span>}
       </div>
       <div className="card-body">
-        <div className="rec-bar" style={{ flexWrap: "wrap" }}>
-          <label className={"btn btn-dark btn-sm" + (tr.active ? " disabled" : "")}>
-            Upload audio
-            <input type="file" accept={AUDIO_ACCEPT} className="hidden" disabled={tr.active} onChange={pickFile(onAudioFile)} />
-          </label>
-          <label className="btn btn-ghost btn-sm">
-            Upload transcript (.txt)
-            <input type="file" accept=".txt,.text,.log,text/plain" className="hidden" onChange={pickFile(onTranscriptFile)} />
-          </label>
-          <button className="btn btn-ghost btn-sm" onClick={() => { setDraft(upload.transcript || ""); setPasting(!pasting); }}>
-            {pasting ? "Close paste box" : "Paste transcript"}
-          </button>
+        <div
+          className={"drop" + (dragging ? " over" : "")}
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+        >
+          <div className="rec-bar" style={{ flexWrap: "wrap" }}>
+            <label className="btn btn-dark btn-sm">
+              Upload transcript
+              <input type="file" multiple accept={TRANSCRIPT_ACCEPT} className="hidden" onChange={pickFile} />
+            </label>
+            <button className="btn btn-ghost btn-sm" onClick={() => { setDraft(upload.transcript || ""); setPasting(!pasting); }}>
+              {pasting ? "Close paste box" : "Paste transcript"}
+            </button>
+            <span className="hint">…or drop a file here</span>
+          </div>
         </div>
 
         {pasting && (
@@ -81,44 +75,57 @@ export default function CallMediaPanel({ tr, upload, onAudioFile, onTranscriptFi
           </div>
         )}
 
-        {(upload.blob || upload.transcript) && (
+        {queue.length > 0 && (
           <div className="rec-files">
-            {upload.blob && (
-              <div className="rec-file">
-                <span className="rec-file-name">🎧 {upload.name}</span>
-                {url && <audio ref={audioRef} src={url} controls preload="metadata" />}
-                {upload.transcript ? (
-                  <span className="hint">Transcript supplied — no conversion needed</span>
-                ) : tr.active ? (
-                  <button className="btn btn-primary btn-sm" onClick={tr.cancel}>Cancel</button>
-                ) : (
-                  <button className="btn btn-dark btn-sm" onClick={() => tr.transcribe(upload.blob, onTranscribed)}>
-                    {tr.text ? "Transcribe again" : "Transcribe this audio"}
-                  </button>
-                )}
-                <button className="btn btn-ghost btn-sm" onClick={onClearAudio} disabled={tr.active}>Remove</button>
+            <div className="q-head">Queued — {queue.length} more to verify</div>
+            {queue.map((q, i) => (
+              <div key={q.name + i} className="rec-file">
+                <span className="rec-file-name">📄 {q.name}</span>
+                <span className="hint">{q.text.length.toLocaleString()} characters</span>
+                <button className="btn btn-ghost btn-sm" onClick={() => onPickQueued(i)}>Verify this next</button>
               </div>
-            )}
-            {upload.transcript && (
-              <div className="rec-file">
-                <span className="rec-file-name">📄 {upload.transcriptName || "Pasted transcript"}</span>
-                <span className="hint">{upload.transcript.length.toLocaleString()} characters — used for verification</span>
-                <button className="btn btn-ghost btn-sm" onClick={onClearTranscript}>Remove</button>
-              </div>
-            )}
+            ))}
           </div>
         )}
 
-        {tr.active && (
-          <div className="prog-wrap">
-            <div className="prog"><div className="prog-bar" style={{ width: `${tr.pct}%` }}></div></div>
-            <p className="hint">{stage}</p>
+        {shown && (
+          <div className="rec-files">
+            <div className="rec-file">
+              <span className="rec-file-name">📄 {upload.transcriptName || "Pasted transcript"}</span>
+              <span className="hint">{shown.length.toLocaleString()} characters — used for verification</span>
+              <button className="btn btn-ghost btn-sm" onClick={onClearTranscript}>Remove</button>
+            </div>
           </div>
         )}
-        {tr.status === "error" && <p className="hint bad" style={{ marginTop: 10 }}>{tr.error}</p>}
+
+        {/* What the parser made of the file. A misread shows up here rather than
+            as mysteriously failing verification. */}
+        {parsed && (
+          <div className="parse-sum">
+            <div className="ps-row">
+              <span className="ps-k">Read as</span>
+              <span className="ps-v">{FORMAT_LABEL[parsed.format] || parsed.format}</span>
+              {parsed.turns.length > 1 && <span className="hint">{parsed.turns.length} turns</span>}
+            </div>
+            {parsed.speakers.length > 0 && (
+              <div className="ps-row">
+                <span className="ps-k">Speakers</span>
+                {parsed.speakers.map((s) => (
+                  <span key={s.name} className={"ps-spk r-" + s.role}>
+                    {s.name}
+                    <select value={s.role} onChange={(e) => onSetRole(s.name, e.target.value)} title="Only the rep's words confirm a value">
+                      {["rep", "agent", "unknown"].map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+                    </select>
+                  </span>
+                ))}
+              </div>
+            )}
+            {parsed.warnings.map((w) => <p key={w} className="hint warn-text">{w}</p>)}
+          </div>
+        )}
 
         <div className="rec-transcript" ref={boxRef} style={{ marginTop: 12, marginBottom: 0 }}>
-          {shown || <span className="hint">The transcript appears here — attach a transcript, or upload audio and convert it.</span>}
+          {shown || <span className="hint">The transcript appears here — upload a file, or paste the text.</span>}
         </div>
         {shown && (
           <div className="rec-bar" style={{ marginTop: 10 }}>
@@ -126,9 +133,8 @@ export default function CallMediaPanel({ tr, upload, onAudioFile, onTranscriptFi
             <span className="hint">{shown.trim().split(/\s+/).length.toLocaleString()} words</span>
           </div>
         )}
-        {source && <p className="hint" style={{ marginTop: 10 }}>{source}</p>}
-        <p className="hint" style={{ marginTop: 6 }}>
-          Speech runs entirely on this computer — the recording is never uploaded. The model downloads once (about 50–90 MB) and is reused afterwards.
+        <p className="hint" style={{ marginTop: 10 }}>
+          Nothing leaves this computer — the transcript is read in the browser and stored locally.
         </p>
       </div>
     </div>

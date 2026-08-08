@@ -2,16 +2,15 @@ import { Checklist } from "./TranscriptView.jsx";
 
 const ORDER = { mismatch: 0, missing: 1, found: 2, quiet: 3 };
 
-export default function VerifyPanel({ result, comp, active, hasTranscript }) {
+export default function VerifyPanel({ result, comp, hasTranscript }) {
   const { checks, matched, total, mismatched } = result;
   const sorted = [...checks].sort((a, b) =>
     (a.soft ? 9 : ORDER[a.status]) - (b.soft ? 9 : ORDER[b.status]));
 
   let pill;
   if (mismatched.length) pill = <span className="pill bad">{mismatched.length} CONTRADICTED</span>;
-  else if (!hasTranscript && !active) pill = <span className="pill na">NO TRANSCRIPT</span>;
+  else if (!hasTranscript) pill = <span className="pill na">NO TRANSCRIPT</span>;
   else if (total > 0 && matched === total) pill = <span className="pill ok">ALL HEARD {matched}/{total}</span>;
-  else if (active) pill = <span className="pill warn">LISTENING — {matched}/{total}</span>;
   else pill = <span className="pill warn">{matched}/{total} HEARD</span>;
 
   return (
@@ -39,8 +38,8 @@ export default function VerifyPanel({ result, comp, active, hasTranscript }) {
         ) : (
           <p className="hint" style={{ marginBottom: 10 }}>All {comp.required} required fields answered.</p>
         )}
-        {!hasTranscript && !active && checks.length > 0 && (
-          <p className="hint" style={{ marginBottom: 10 }}>Attach the call audio or a transcript to check these against what the payer said.</p>
+        {!hasTranscript && checks.length > 0 && (
+          <p className="hint" style={{ marginBottom: 10 }}>Attach the call transcript to check these against what the payer said.</p>
         )}
         <Checklist checks={sorted} />
       </div>

@@ -1,0 +1,235 @@
+// Turns an exported call transcript into clean prose plus speaker attribution.
+//
+// Two reasons this has to exist rather than feeding the raw file to verify.js:
+//
+// 1. Speaker headers and timestamps are noise the matcher reads as content.
+//    prepTranscript() concatenates every digit into a stream so a spoken member ID
+//    can be matched across word boundaries — drop "Aug 4, 2026 08:38 AM" into that
+//    and those digits sit adjacent to real values, where they can glue onto a
+//    policy-ID match. segment() also cuts clauses on [.?!;\n], so a header line
+//    becomes a clause of its own.
+//
+// 2. Knowing WHO said something changes what it proves. Our own agent reads
+//    figures back to the rep constantly ("the member has met 526.24, right?").
+//    Without attribution the engine counts that as confirmation of the form — the
+//    form agreeing with itself. See ROLES below.
+
+const RE_RC_HEADER = /^(.{1,60}?)\s*\|\s*(.{3,40}?\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\s*$/i;
+const RE_LABEL = /^([A-Za-z][A-Za-z0-9 .'’_-]{0,38}):[ \t]+(.*)$/;
+const RE_VTT_CUE = /^(\d{1,2}:)?\d{1,2}:\d{2}[.,]\d{3}\s*-->\s*(\d{1,2}:)?\d{1,2}:\d{2}[.,]\d{3}/;
+const RE_VTT_VOICE = /^<v\s+([^>]+)>([\s\S]*?)(?:<\/v>)?$/i;
+const RE_SRT_INDEX = /^\d+$/;
+const RE_TAGS = /<\/?[^>]+>/g;
+
+// Phone-tree and hold audio. Contributes phone numbers, menu digits and boilerplate
+// that belong to no speaker, and every one of them is a false candidate value.
+const RE_IVR = /\bpress \d|press one|dial it at any time|monitored or recorded|may be recorded|remain on the line|for further options|question survey|your call is regarding|if you are a\b/i;
+
+const clean = (s) => String(s || "").replace(/\r\n?/g, "\n").replace(/ /g, " ");
+const squash = (s) => s.replace(/[ \t]+/g, " ").trim();
+
+// ------------------------------------------------------------------ formats
+
+function parseRingCentral(lines) {
+  const turns = [];
+  let cur = null;
+  for (const line of lines) {
+    const m = line.match(RE_RC_HEADER);
+    if (m) {
+      if (cur) turns.push(cur);
+      cur = { speaker: squash(m[1]), at: squash(m[2]), parts: [] };
+      continue;
+    }
+    if (cur && line.trim()) cur.parts.push(squash(line));
+  }
+  if (cur) turns.push(cur);
+  return turns.map((t) => ({ speaker: t.speaker, at: t.at, text: t.parts.join(" ") }));
+}
+
+function parseLabelled(lines) {
+  const turns = [];
+  let cur = null;
+  for (const line of lines) {
+    const m = line.match(RE_LABEL);
+    if (m) {
+      if (cur) turns.push(cur);
+      cur = { speaker: squash(m[1]), at: "", parts: [squash(m[2])] };
+      continue;
+    }
+    if (cur && line.trim()) cur.parts.push(squash(line));
+  }
+  if (cur) turns.push(cur);
+  return turns.map((t) => ({ speaker: t.speaker, at: t.at, text: t.parts.filter(Boolean).join(" ") }));
+}
+
+// WebVTT and SRT share enough structure to parse together: an optional index line,
+// a timing line, then payload until a blank line.
+function parseCues(lines) {
+  const turns = [];
+  let at = "", body = [];
+  const flush = () => {
+    if (!body.length) return;
+    let speaker = "";
+    const text = body.map((l) => {
+      const v = l.match(RE_VTT_VOICE);
+      if (v) { speaker = squash(v[1]); return squash(v[2]); }
+      return squash(l);
+    }).join(" ").replace(RE_TAGS, "").trim();
+    if (text) turns.push({ speaker, at, text });
+    body = [];
+  };
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) { flush(); continue; }
+    if (t.toUpperCase().startsWith("WEBVTT") || RE_SRT_INDEX.test(t)) continue;
+    const cue = t.match(RE_VTT_CUE);
+    if (cue) { flush(); at = cue[0].split("-->")[0].trim(); continue; }
+    body.push(t);
+  }
+  flush();
+
+  // Cue files often carry no speaker at all, and where they do, consecutive cues
+  // from one speaker are separate cues. Merge them so a turn is a turn.
+  const merged = [];
+  for (const t of turns) {
+    const last = merged[merged.length - 1];
+    if (last && last.speaker === t.speaker) { last.text += " " + t.text; continue; }
+    merged.push({ ...t });
+  }
+  return merged;
+}
+
+function detect(raw, lines) {
+  if (/^﻿?WEBVTT/i.test(raw) || lines.some((l) => RE_VTT_CUE.test(l.trim()))) return "vtt";
+  // One header is enough when it opens the file — "Name | Mon D, YYYY H:MM AM" on
+  // the first line is not something prose does by accident. Anywhere else, require
+  // a second so a stray line cannot reshape a plain transcript.
+  const headers = lines.filter((l) => RE_RC_HEADER.test(l)).length;
+  const first = lines.find((l) => l.trim());
+  if (headers >= 2 || (headers === 1 && first && RE_RC_HEADER.test(first))) return "ringcentral";
+  // A label format has to repeat: "Note: ..." at the top of a plain file is not a
+  // speaker, so require at least two lines and at least one repeated name.
+  const labels = lines.map((l) => l.match(RE_LABEL)).filter(Boolean).map((m) => squash(m[1]));
+  if (labels.length >= 3 && new Set(labels).size < labels.length) return "labelled";
+  return "plain";
+}
+
+// ------------------------------------------------------------------ roles
+
+// Who said it decides what it proves:
+//   rep     the payer's representative — the only voice that CONFIRMS a value
+//   agent   our verifier — reading a number back is not the payer stating it
+//   ivr     phone tree and hold messages, dropped
+//   unknown unattributed; treated as rep, since a plain transcript with no
+//           speakers must keep verifying exactly as it did before
+const RE_QUESTION = /\?|^\s*(can|could|what|when|who|how|is|are|do|does|did|may|would|will|please)\b/i;
+
+export function assignRoles(turns, { verifiedBy, insName, agentNames } = {}) {
+  const names = [...new Set(turns.map((t) => t.speaker).filter(Boolean))];
+  if (!names.length) return { turns: turns.map((t) => ({ ...t, role: "unknown" })), speakers: [] };
+
+  const key = (s) => String(s || "").toUpperCase().replace(/[^A-Z]/g, "");
+  const carrier = key(insName);
+  const mine = new Set([key(verifiedBy), ...(agentNames || []).map(key)].filter(Boolean));
+
+  const stats = names.map((n) => {
+    const own = turns.filter((t) => t.speaker === n);
+    const questions = own.filter((t) => RE_QUESTION.test(t.text)).length;
+    return { name: n, turnCount: own.length, questionRatio: own.length ? questions / own.length : 0 };
+  });
+
+  const role = new Map();
+  for (const s of stats) {
+    const k = key(s.name);
+    if (!k) continue;
+    // The payer's own name is the strongest signal available: the transcript
+    // labels the rep's channel with the carrier ("ASH" inside "CIGNA ASH").
+    if (carrier && k.length >= 3 && (carrier.includes(k) || k.includes(carrier))) role.set(s.name, "rep");
+    else if (mine.has(k)) role.set(s.name, "agent");
+  }
+
+  // With two speakers, naming one names the other.
+  if (names.length === 2 && role.size === 1) {
+    const [known] = [...role.keys()];
+    const other = names.find((n) => n !== known);
+    role.set(other, role.get(known) === "rep" ? "agent" : "rep");
+  }
+
+  // Nothing matched by name: the verifier is the one asking the questions.
+  if (!role.size && stats.length >= 2) {
+    const ranked = [...stats].sort((a, b) => b.questionRatio - a.questionRatio);
+    role.set(ranked[0].name, "agent");
+    for (const s of ranked.slice(1)) role.set(s.name, "rep");
+  }
+
+  return {
+    turns: turns.map((t) => ({ ...t, role: role.get(t.speaker) || "unknown" })),
+    speakers: stats.map((s) => ({ ...s, role: role.get(s.name) || "unknown" })),
+  };
+}
+
+// ------------------------------------------------------------------ entry point
+
+export function parseTranscript(raw, opts = {}) {
+  const src = clean(raw);
+  const lines = src.split("\n");
+  const format = detect(src, lines);
+  const warnings = [];
+
+  let turns =
+    format === "ringcentral" ? parseRingCentral(lines)
+      : format === "vtt" ? parseCues(lines)
+        : format === "labelled" ? parseLabelled(lines)
+          : [{ speaker: "", at: "", text: squash(src.replace(/\n+/g, "\n")).trim() }];
+
+  if (format === "plain") {
+    // Keep the original line structure — segment() relies on newlines.
+    turns = [{ speaker: "", at: "", text: src.trim() }];
+  }
+
+  turns = turns.filter((t) => t.text);
+
+  // Drop the phone tree, but only the run of opening turns from whoever the
+  // recording opens with. Once a second voice appears the call has begun, and
+  // "press 3 for authorizations" said by a live rep is real content.
+  let lead = 0;
+  while (lead < turns.length && turns[lead].speaker === turns[0].speaker && RE_IVR.test(turns[lead].text)) lead++;
+  if (lead === turns.length) lead = 0; // never throw the whole transcript away
+  if (lead) {
+    turns = turns.slice(lead).map((t) => ({ ...t }));
+    warnings.push(`Skipped ${lead} phone-menu message${lead > 1 ? "s" : ""} at the start of the call.`);
+  }
+
+  const withRoles = assignRoles(turns, opts);
+
+  // Build the clean text and record where each turn landed, so a match span can be
+  // traced back to the speaker who produced it.
+  let text = "";
+  const ranges = [];
+  withRoles.turns.forEach((t, i) => {
+    if (i) text += "\n";
+    const start = text.length;
+    text += t.text;
+    ranges.push({ start, end: text.length, role: t.role, speaker: t.speaker });
+  });
+
+  if (!withRoles.speakers.some((s) => s.role === "rep") && withRoles.speakers.length) {
+    warnings.push("Could not tell which speaker is the insurance rep — every value will be treated as confirmed.");
+  }
+
+  return { format, turns: withRoles.turns, speakers: withRoles.speakers, text, ranges, warnings };
+}
+
+// Character offset -> role. Used by verify.js to decide whether a match is a
+// confirmation or our own agent echoing a number back.
+export function roleAt(ranges, offset) {
+  if (!ranges || !ranges.length) return "unknown";
+  let lo = 0, hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (offset < ranges[mid].start) hi = mid - 1;
+    else if (offset >= ranges[mid].end) lo = mid + 1;
+    else return ranges[mid].role;
+  }
+  return "unknown";
+}

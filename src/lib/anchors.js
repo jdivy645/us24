@@ -47,15 +47,40 @@ export const ANCHORS = {
 
   authWindow: { m: "duration", g: "window", q: ["auth", "authorization", "request", "submit", "obtain", "prior"],
     heads: [["auth", "window"], ["request", "within"], ["submit", "within"], ["prior", "authorization"]] },
-  tfl: { m: "duration", g: "window", q: ["claim", "claims", "file", "filing", "timely", "bill", "billing"],
-    heads: [["timely", "filing"], ["filing", "limit"], ["file", "claims"], ["claims", "must"], ["tfl"]] },
+  // "original submission" / "initial claim" / "fresh claim" are how reps and our
+  // own agents actually say this — the textbook phrase "timely filing" is often
+  // only in the question, not the answer.
+  tfl: { m: "duration", g: "window", q: ["claim", "claims", "file", "filing", "timely", "bill", "billing", "original", "initial", "fresh"],
+    heads: [["timely", "filing"], ["filing", "limit"], ["file", "claims"], ["claims", "must"], ["tfl"],
+      ["original", "submission"], ["initial", "claim"], ["fresh", "claim"]] },
   tflCorr: { m: "duration", g: "window", q: ["corrected", "correction", "corrections", "resubmit", "resubmission", "rebill"],
-    heads: [["corrected", "claim"], ["corrected", "claims"], ["corrections"], ["resubmission"]] },
+    heads: [["corrected", "claim"], ["corrected", "claims"], ["corrections"], ["resubmission"], ["corrected"]] },
 
   insPhone: { m: "phone", heads: [["phone", "number"], ["phone"], ["call", "us", "at"], ["reach", "us", "at"], ["provider", "services"]] },
 
+  // The visit at which authorization kicks in. It used to live buried inside the
+  // free-text coverage/authTx strings, which is exactly why a call saying "after
+  // the eighth visit" could be typed as "AFTER 5TH VISIT" with nothing to notice.
+  // As its own count field in the visit family it competes with visitLimit and
+  // visitUsed for the same numbers, so the nearest-anchor rule arbitrates.
+  authAfter: { m: "count", g: "visit", q: ["after", "beyond", "past", "following", "starting", "subsequent", "initial"],
+    heads: [["after", "the"], ["beyond", "the"], ["starting", "with"], ["after"]] },
+
+  termDate: { m: "date", q: ["termination", "terminated", "term", "end", "ends", "cancelled", "canceled", "through"],
+    heads: [["termination", "date"], ["term", "date"], ["terminated"], ["end", "date"], ["cancellation"]] },
+
+  secEff: { m: "date", g: "secdate", q: ["secondary", "supplemental"],
+    heads: [["secondary", "effective"], ["supplemental", "effective"]] },
+  secDed: { m: "money", g: "ded", q: ["secondary", "supplemental"],
+    heads: [["secondary", "deductible"], ["supplemental", "deductible"]] },
+  secVisit: { m: "count", g: "visit", q: ["secondary", "supplemental"],
+    heads: [["secondary", "visit"], ["secondary", "visits"], ["supplemental", "visit"]] },
+  secUsed: { m: "count", g: "visit", q: ["secondary", "supplemental"],
+    heads: [["secondary", "used"], ["supplemental", "used"]] },
+
   // yes/no + enum topics — the decision comes from clause polarity, not a value
   network: { m: "enum2", heads: [["network"], ["participating"], ["contracted"]] },
+  networkInd: { m: "enum2", heads: [["individual", "provider"], ["rendering", "provider"], ["provider", "level"], ["individually"]] },
   copay: { m: "yesno", heads: [["copay"], ["copays"], ["copayment"], ["co", "pay"], ["co", "payment"]] },
   coins: { m: "yesno", heads: [["coinsurance"], ["co", "insurance"], ["co", "ins"]] },
   dedApply: { m: "yesno", heads: [["deductible"], ["deductibles"]] },
@@ -73,6 +98,9 @@ export const ANCHORS = {
   lastName: { m: "none" }, firstName: { m: "none" }, repName: { m: "none" },
   insName: { m: "none" }, planType: { m: "none" }, coverage: { m: "none" },
   authHow: { m: "none" }, secName: { m: "none" }, authDates: { m: "none" }, claimAddr: { m: "none" },
+  serviceType: { m: "none", heads: [["service", "type"], ["physical", "therapy"], ["occupational", "therapy"], ["speech", "therapy"], ["therapy"]] },
+  primary: { m: "none", heads: [["primary", "insurance"], ["primary", "carrier"], ["primary", "payer"], ["primary"]] },
+  secPlan: { m: "none", heads: [["secondary", "plan"], ["supplemental", "plan"]] },
 };
 
 // Qualifiers belonging to a sibling concept the form does not track — they veto
@@ -83,7 +111,7 @@ const FOREIGN = {
   visit: ["combined", "shared", "chiropractic", "speech", "occupational"],
   window: ["appeal", "appeals", "reconsideration", "grievance", "dispute"],
   cost: ["specialist", "emergency", "urgent", "inpatient", "hospital"],
-  id: [], auth: [],
+  id: [], auth: [], secdate: [],
 };
 
 // firstToken -> [{key, phrase}], longest phrase first
@@ -158,6 +186,16 @@ export const KEYWORDS = {
   authWindow: [["auth"], ["authorization"], ["request"], ["submit"], ["within"], ["prior"], ["advance"]],
   tfl: [["timely"], ["filing"], ["claim"], ["claims"], ["tfl"], ["billing"]],
   tflCorr: [["corrected"], ["correction"], ["corrections"], ["resubmit"], ["resubmission"], ["rebill"], ["timely"], ["filing"]],
+  serviceType: [["service"], ["therapy"], ["physical"], ["occupational"], ["speech"], ["discipline"]],
+  termDate: [["termination"], ["terminated"], ["term"], ["end"], ["cancelled"], ["canceled"], ["through"], ["active"]],
+  primary: [["primary"], ["primary", "insurance"], ["primary", "carrier"], ["payer"], ["carrier"]],
+  networkInd: [["individual"], ["rendering"], ["provider"], ["network"], ["participating"]],
+  authAfter: [["visit"], ["visits"], ["after"], ["authorization"], ["auth"], ["initial"], ["review"]],
+  secPlan: [["secondary", "plan"], ["secondary"], ["supplemental"], ["plan"]],
+  secEff: [["secondary"], ["supplemental"], ["effective"]],
+  secDed: [["secondary"], ["supplemental"], ["deductible"]],
+  secVisit: [["secondary"], ["supplemental"], ["visit"], ["visits"]],
+  secUsed: [["secondary"], ["supplemental"], ["used"]],
 };
 
 export const KEYWORD_WINDOW = 15;

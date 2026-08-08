@@ -1,128 +1,174 @@
 import { jsPDF } from "jspdf";
-import "jspdf-autotable";
-import { fmtDate, dash as d } from "../data/fields.js";
+import { buildVobDoc } from "./vobTemplate.js";
+import { LOGO_PNG } from "../assets/logo.js";
 import { vobName } from "./files.js";
 
-// Expects a trimmed snapshot from collect(); validation happens in App.
-// Returns the generated filename (stored on the saved record as _file).
-export function makePDF(v) {
+// Renders the document model from vobTemplate.js as the client's production
+// layout: a bordered two-column table, alternating row shading, one page.
+//
+// Drawn directly rather than through jspdf-autotable, which cannot mix a bold
+// label and a normal value inside one cell without willDrawCell hooks plus manual
+// row-height math — at which point you have written this layout engine anyway.
+
+const NAVY = [27, 58, 107], ORANGE = [232, 118, 31], INK = [15, 27, 45];
+const MUTED = [128, 140, 158], LINE = [150, 168, 192], SHADE = [223, 233, 244];
+
+const M = 36;                 // page margin
+const HEAD_H = 96;            // logo band + title
+const FOOT_H = 34;
+
+// Tried in order until the body fits on one page. Scale 0 is the normal case;
+// the rest absorb an unusually long claim address or Additional Info.
+const SCALES = [
+  { font: 8.0, lead: 10.0, pad: 4.5 },
+  { font: 7.5, lead: 9.2, pad: 4.0 },
+  { font: 7.0, lead: 8.6, pad: 3.5 },
+  { font: 6.5, lead: 8.0, pad: 3.0 },
+];
+
+// Wraps `value` after a bold label of width `lw`: the first line shares the row
+// with the label, the rest use the cell's full width.
+function wrapMixed(doc, value, firstW, fullW) {
+  const text = String(value || "");
+  if (!text) return [];
+  const first = doc.splitTextToSize(text, Math.max(firstW, 12));
+  if (first.length <= 1) return first;
+  // The value did not fit beside the label — keep line 1, re-wrap the remainder.
+  const head = first[0];
+  const rest = text.slice(head.length).replace(/^\s+/, "");
+  return rest ? [head, ...doc.splitTextToSize(rest, fullW)] : [head];
+}
+
+// Draws one "Label: value" line. Returns the height consumed. With measure=true
+// it computes that height without touching the page.
+function richLine(doc, x, y, w, line, S, measure) {
+  if (line.gap) return S.lead * 0.5;
+
+  doc.setFontSize(S.font);
+  doc.setFont("helvetica", "bold");
+  const label = line.label || "";
+  const lw = label ? doc.getTextWidth(label) + 4 : 0;
+  const body = (line.value != null && line.value !== "" ? line.value : line.text || "") + (line.mark || "");
+  doc.setFont("helvetica", "normal");
+  const parts = wrapMixed(doc, body, w - lw, w);
+
+  if (!measure) {
+    if (label) {
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...INK);
+      doc.text(label, x, y);
+    }
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...(line.muted ? MUTED : INK));
+    if (parts[0]) doc.text(parts[0], x + lw, y);
+    for (let i = 1; i < parts.length; i++) doc.text(parts[i], x, y + i * S.lead);
+  }
+  return Math.max(1, parts.length) * S.lead;
+}
+
+const cellHeight = (doc, cell, w, S) =>
+  cell.lines.reduce((h, l) => h + richLine(doc, 0, 0, w, l, S, true), 0);
+
+function rowHeight(doc, row, W, S) {
+  const cw = row.cells.length === 1 ? W - S.pad * 2 : W / 2 - S.pad * 2;
+  return Math.max(...row.cells.map((c) => cellHeight(doc, c, cw, S))) + S.pad * 2;
+}
+
+const bodyHeight = (doc, model, W, S) =>
+  model.rows.reduce((h, r) => h + rowHeight(doc, r, W, S), 0);
+
+function drawHeader(doc, model, W) {
+  const cx = M + W / 2;
+  if (LOGO_PNG) {
+    const lw = 170, lh = 44;
+    try { doc.addImage(LOGO_PNG, "PNG", cx - lw / 2, 24, lw, lh); } catch { drawWordmark(doc, cx); }
+  } else {
+    drawWordmark(doc, cx);
+  }
+
+  // Patient-responsibility box, top right.
+  doc.setFont("helvetica", "bold"); doc.setFontSize(8);
+  const bw = doc.getTextWidth(model.patBox) + 14;
+  doc.setDrawColor(...INK); doc.setLineWidth(0.8);
+  doc.rect(M + W - bw, 24, bw, 18);
+  doc.setTextColor(...INK);
+  doc.text(model.patBox, M + W - bw / 2, 36, { align: "center" });
+
+  // Title, centred and underlined.
+  doc.setFontSize(13); doc.setTextColor(...NAVY);
+  doc.text(model.title, cx, 78, { align: "center" });
+  const tw = doc.getTextWidth(model.title);
+  doc.setDrawColor(...NAVY); doc.setLineWidth(0.7);
+  doc.line(cx - tw / 2, 81, cx + tw / 2, 81);
+}
+
+// Fallback when no logo asset is present: the wordmark set in type.
+function drawWordmark(doc, cx) {
+  doc.setFont("helvetica", "bold"); doc.setFontSize(20);
+  const a = "US", b = "24", c = " SOLUTIONS";
+  const total = doc.getTextWidth(a + b + c);
+  let x = cx - total / 2;
+  doc.setTextColor(...NAVY); doc.text(a, x, 42); x += doc.getTextWidth(a);
+  doc.setTextColor(...ORANGE); doc.text(b, x, 42); x += doc.getTextWidth(b);
+  doc.setTextColor(...NAVY); doc.text(c, x, 42);
+  doc.setFont("helvetica", "bolditalic"); doc.setFontSize(7.5); doc.setTextColor(...INK);
+  doc.text("Innovative Technology Driven", cx, 54, { align: "center" });
+  doc.setDrawColor(...ORANGE); doc.setLineWidth(0.7);
+  doc.line(cx - total / 2, 57, cx + total / 2, 57);
+}
+
+// Builds the document without saving it — the testable half.
+export function buildPDF(v, meta = {}) {
+  const model = buildVobDoc(v, meta);
   const doc = new jsPDF({ unit: "pt", format: "letter" });
-  const W = doc.internal.pageSize.getWidth();
-  const M = 42;
-  const NAVY = [27, 58, 107], ORANGE = [232, 118, 31], INK = [15, 27, 45], SOFT = [67, 83, 107], LINE = [221, 228, 238];
+  const PW = doc.internal.pageSize.getWidth();
+  const PH = doc.internal.pageSize.getHeight();
+  const W = PW - M * 2;
+  const avail = PH - HEAD_H - FOOT_H - M;
 
-  // Header
-  doc.setFont("helvetica", "bold"); doc.setFontSize(17); doc.setTextColor(...NAVY);
-  doc.text("US", M, 54);
-  const w1 = doc.getTextWidth("US");
-  doc.setTextColor(...ORANGE); doc.text("24", M + w1, 54);
-  const w2 = doc.getTextWidth("24");
-  doc.setTextColor(...NAVY); doc.text(" SOLUTIONS", M + w1 + w2, 54);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(...SOFT);
-  doc.text("I N N O V A T I V E   T E C H N O L O G Y   D R I V E N", M, 66);
+  const S = SCALES.find((s) => bodyHeight(doc, model, W, s) <= avail) || SCALES[SCALES.length - 1];
 
-  doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(...NAVY);
-  doc.text("Pre-Authorization & Benefits Determination", W - M, 52, { align: "right" });
+  drawHeader(doc, model, W);
 
-  const pct = v.covPct || ((v.copay === "NO" && v.coins === "NO") ? "100%" : "");
-  const stamp = pct ? `PATIENT RESPONSIBILITY COVERED: ${pct}` : "BENEFITS VERIFIED";
-  doc.setFontSize(7.5);
-  const sw = doc.getTextWidth(stamp) + 16;
-  doc.setFillColor(231, 245, 239); doc.setDrawColor(185, 227, 210);
-  doc.roundedRect(W - M - sw, 58, sw, 15, 3, 3, "FD");
-  doc.setTextColor(14, 124, 90); doc.text(stamp, W - M - sw / 2, 68, { align: "center" });
+  let y = HEAD_H;
+  doc.setLineWidth(0.5);
+  model.rows.forEach((row, i) => {
+    const h = rowHeight(doc, row, W, S);
+    const span = row.cells.length === 1;
 
-  doc.setDrawColor(...NAVY); doc.setLineWidth(2); doc.line(M, 80, W - M, 80);
+    if (i % 2 === 0) {
+      doc.setFillColor(...SHADE);
+      doc.rect(M, y, W, h, "F");
+    }
+    doc.setDrawColor(...LINE);
+    doc.rect(M, y, W, h);
+    if (!span) doc.line(M + W / 2, y, M + W / 2, y + h);
 
-  let y = 96;
-  if (v.note) {
-    doc.setFillColor(253, 240, 228); doc.rect(M, y, W - M * 2, 22, "F");
-    doc.setFillColor(...ORANGE); doc.rect(M, y, 3, 22, "F");
-    doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...INK);
-    doc.text(doc.splitTextToSize(v.note, W - M * 2 - 20), M + 10, y + 13);
-    y += 32;
-  }
-
-  const name = `${v.lastName || ""}${v.lastName && v.firstName ? ", " : ""}${v.firstName || ""}`;
-  const section = (title, rows) => {
-    doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(...ORANGE);
-    doc.text(title.toUpperCase(), M, y);
-    doc.setDrawColor(...LINE); doc.setLineWidth(.6); doc.line(M, y + 3, W - M, y + 3);
-    y += 6;
-    doc.autoTable({
-      startY: y, margin: { left: M, right: M },
-      body: rows, theme: "plain",
-      styles: { fontSize: 8, cellPadding: { top: 2.6, bottom: 2.6, left: 0, right: 6 }, textColor: INK, lineWidth: 0 },
-      columnStyles: {
-        0: { cellWidth: (W - M * 2) / 4 - 6, textColor: SOFT },
-        1: { cellWidth: (W - M * 2) / 4 - 6, fontStyle: "bold", halign: "left" },
-        2: { cellWidth: (W - M * 2) / 4 - 6, textColor: SOFT },
-        3: { cellWidth: (W - M * 2) / 4 - 6, fontStyle: "bold", halign: "left" }
-      },
-      didDrawCell: (dt) => {
-        if (dt.section === "body" && dt.column.index === 3) {
-          doc.setDrawColor(238, 242, 247); doc.setLineWidth(.4);
-          doc.line(M, dt.cell.y + dt.cell.height, W - M, dt.cell.y + dt.cell.height);
-        }
-      }
+    const cw = span ? W - S.pad * 2 : W / 2 - S.pad * 2;
+    row.cells.forEach((cell, j) => {
+      let cy = y + S.pad + S.font;
+      const cx = M + (j === 0 ? S.pad : W / 2 + S.pad);
+      for (const line of cell.lines) cy += richLine(doc, cx, cy, cw, line, S, false);
     });
-    y = doc.lastAutoTable.finalY + 12;
-  };
-  const R = (a, b, c, e) => [a, d(b), c || "", c ? d(e) : ""];
+    y += h;
+  });
 
-  section("Patient", [
-    R("Patient name", name, "Date of birth", fmtDate(v.dob)),
-    R("Verification date", fmtDate(v.today), "Verified by", v.verifiedBy)
-  ]);
-  section("Insurance & plan", [
-    R("Insurance", v.insName, "Payer phone", v.insPhone),
-    R("Policy ID", v.policyId, "Group ID", v.groupId),
-    R("Plan type", v.planType, "Service type", v.serviceType),
-    R("Network status", v.network, "Coverage", v.coverage),
-    R("Effective date", fmtDate(v.effDate), "Termination date", v.termDate),
-    R("Payer ID", v.payerId, "HCA / HRA", v.hra)
-  ]);
-  section("Patient financial responsibility", [
-    R("Co-pay", v.copay, "Co-pay amount", v.copayAmt),
-    R("Co-insurance", v.coins, "Co-insurance %", v.coinsAmt),
-    R("Deductible applies", v.dedApply, "Deductible (individual)", v.dedInd),
-    R("Deductible met", v.dedMet, "Deductible remaining", v.dedRem),
-    R("Out of pocket max", v.oop, "OOP met", v.oopMet),
-    R("OOP remaining", v.oopRem, "Coverage %", v.covPct)
-  ]);
-  section("Visits & authorization", [
-    R("Visit limitation", v.visitLimit, "Visits used", v.visitUsed),
-    R("Auth — initial eval", v.authEval, "Auth — treatment", v.authTx),
-    R("Referral required", v.referral, "PCP referral", v.pcpRef),
-    R("Authorization #", v.authNum, "Auth coverage dates", v.authDates),
-    R("How to obtain auth", v.authHow, "Request window from DOS", v.authWindow)
-  ]);
-  section("Claims & call record", [
-    R("Timely filing — claims", v.tfl, "Timely filing — corrected", v.tflCorr),
-    R("Primary payer", v.primary, "Secondary on file", v.hasSec),
-    R("Insurance rep", v.repName, "Call reference", v.callRef),
-    R("Claim mailing address", v.claimAddr, "", "")
-  ]);
-  if (v.hasSec === "YES") {
-    section("Secondary insurance", [
-      R("Insurance", v.secName, "Plan name", v.secPlan),
-      R("Policy ID", v.secPolicy, "Effective date", fmtDate(v.secEff)),
-      R("Deductible", v.secDed, "Visit limit", v.secVisit),
-      R("Used limit", v.secUsed, "", "")
-    ]);
-  }
+  // Footnote for values marked as carrier/portal sourced.
+  doc.setFont("helvetica", "normal"); doc.setFontSize(6.5); doc.setTextColor(...MUTED);
+  let fy = y + 10;
+  for (const n of model.footnotes) { doc.text(n, M, fy); fy += 8; }
 
-  // Footer on every page
-  const pages = doc.internal.getNumberOfPages();
-  for (let i = 1; i <= pages; i++) {
-    doc.setPage(i);
-    const H = doc.internal.pageSize.getHeight();
-    doc.setDrawColor(...LINE); doc.setLineWidth(.6); doc.line(M, H - 42, W - M, H - 42);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(...SOFT);
-    doc.text("US24 Solutions — Confidential. Benefits quoted are not a guarantee of payment.", M, H - 30);
-    doc.text(`Page ${i} of ${pages}`, W - M, H - 30, { align: "right" });
-  }
+  doc.setDrawColor(...LINE); doc.setLineWidth(0.5);
+  doc.line(M, PH - 30, M + W, PH - 30);
+  doc.setFontSize(7);
+  doc.text(model.footer, M, PH - 20);
 
+  return doc;
+}
+
+// Returns the generated filename (stored on the saved record as _file).
+export function makePDF(v, meta = {}) {
+  const doc = buildPDF(v, meta);
   const fn = vobName(v) + ".pdf";
   doc.save(fn);
   return fn;

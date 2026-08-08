@@ -213,9 +213,9 @@ test("dates spoken several ways all match", () => {
 
 // ---------------- verdict edges ----------------
 
-test("no transcript is NO AUDIO with a pending checklist", () => {
+test("no transcript is NO TRANSCRIPT with a pending checklist", () => {
   const r = checkTranscript(SAMPLE, "");
-  assert.strictEqual(r.verdict, "NO AUDIO");
+  assert.strictEqual(r.verdict, "NO TRANSCRIPT");
   assert.ok(r.checks.length > 10, "checklist should still list what must be confirmed");
 });
 
@@ -284,4 +284,30 @@ test("the .txt report names contradictions, blanks and the verdict", () => {
   assert.match(txt, /MISMATCH — call says "forty dollars"/);
   assert.match(txt, /MISSING FROM FORM/);
   assert.match(txt, /Insurance rep name/, "the blank required field should be listed");
+});
+
+// ---------------- long transcripts ----------------
+
+// MAX_HITS used to stop the contradiction scan after the first 8 mentions of a
+// topic, so on a long call a figure restated differently near the end was
+// invisible and the record read APPROVED. That is a wrong verdict, not thin
+// coverage, and it is exactly the shape of a two-hour benefits call.
+test("a contradiction stated only at the twentieth mention is still caught", () => {
+  const filler = "The deductible has been discussed already. ";
+  const call = FULL_CALL + "\n" + filler.repeat(20) +
+    "\nJust to correct myself, the individual deductible is two thousand five hundred dollars.";
+  const r = checkTranscript({ ...SAMPLE, dedInd: "$900.00", dedApply: "YES" }, call);
+  assert.strictEqual(st(r, "dedInd"), "mismatch");
+  assert.match(String(heard(r, "dedInd")), /two thousand five hundred|2,?500/);
+});
+
+test("a long transcript still verifies quickly", () => {
+  // ~150k characters, the size of a two-hour call.
+  const call = (FULL_CALL + "\n").repeat(Math.ceil(150000 / (FULL_CALL.length + 1)));
+  assert.ok(call.length >= 150000, `fixture is ${call.length} chars`);
+  const t0 = Date.now();
+  const r = checkTranscript(SAMPLE, call);
+  const ms = Date.now() - t0;
+  assert.ok(r.checks.length > 10);
+  assert.ok(ms < 3000, `checkTranscript took ${ms}ms on a ${call.length}-char transcript`);
 });

@@ -1,0 +1,434 @@
+// The only thing components talk to about stored data.
+//
+// Everything is async and takes/returns plain JSON — no IDBRequest crosses this
+// boundary. That is deliberate: when this team outgrows one browser, replacing
+// these bodies with fetch("/api/…") is a file swap, not a refactor.
+import * as idb from "./idb.js";
+import { load as loadLegacy, store as storeLegacy } from "./storage.js";
+import { patientKey, carrierKey, policyKey, serviceKey, caseKey, norm, isProvisional, looksSameName, findSimilarCases } from "./identity.js";
+import { CARRIER_FIELDS } from "./schema.js";
+import { changedKeys } from "./history.js";
+import { migrateLegacy, toLegacyRow } from "./migrate.js";
+import { buildPrefillForm, referenceFrom, carrierLearnings } from "./prefill.js";
+import { F } from "../data/fields.js";
+
+const nowISO = () => new Date().toISOString();
+const newId = (p) => `${p}_${crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)}`;
+const val = (o, k) => String((o || {})[k] ?? "").trim();
+
+// How many rows the legacy localStorage mirror keeps. Enough for the old
+// standalone HTML to stay useful, small enough that quota is never in play.
+const MIRROR_ROWS = 60;
+
+/* ---------------------------------------------------------------- lifecycle */
+
+let _ready = null;
+export function ready() {
+  if (!_ready) _ready = (async () => {
+    await idb.openDb();
+    const done = await idb.getMeta("legacyMigratedAt");
+    if (done) return { migrated: false };
+    return runMigration();
+  })().catch((e) => { _ready = null; throw e; });
+  return _ready;
+}
+
+async function runMigration() {
+  const rows = loadLegacy();
+  if (!rows.length) {
+    await idb.setMeta("legacyMigratedAt", nowISO());
+    return { migrated: false };
+  }
+  // Keep the original bytes before touching anything. It lives in IndexedDB, so it
+  // costs no localStorage quota, and it is the only copy of data that cannot be
+  // regenerated from anywhere else.
+  await idb.setMeta("legacyBackupV1", JSON.stringify(rows));
+
+  const out = migrateLegacy(rows, { now: nowISO() });
+  await idb.tx(["patients", "carriers", "cases", "versions", "transcripts"], "readwrite", (s) => {
+    for (const p of out.patients) s.patients.put(p);
+    for (const c of out.carriers) s.carriers.put(c);
+    for (const k of out.cases) s.cases.put(k);
+    for (const v of out.versions) s.versions.put(v);
+    for (const t of out.transcripts) s.transcripts.put(t);
+  });
+  await idb.setMeta("legacyMigratedAt", nowISO());
+  await idb.setMeta("schemaVersion", 2);
+  await refreshMirror();
+  idb.requestPersistence();
+  return { migrated: true, counts: { patients: out.patients.length, carriers: out.carriers.length, cases: out.cases.length, versions: out.versions.length } };
+}
+
+export async function stats() {
+  const [patients, carriers, cases, versions] = await Promise.all(
+    ["patients", "carriers", "cases", "versions"].map((s) => idb.getAll(s)));
+  return {
+    patients: patients.length, carriers: carriers.length,
+    cases: cases.length, versions: versions.length,
+    quota: await idb.storageEstimate(),
+  };
+}
+
+/* ----------------------------------------------------------------- patients */
+
+export async function findPatient({ lastName, firstName, dob }) {
+  const all = await idb.getAll("patients");
+  const key = patientKey({ lastName, firstName, dob });
+  const exact = all.find((p) => p.key === key) || null;
+  // Same surname and DOB with a shortened first name is one person recorded twice.
+  // Offered as a candidate, never merged silently.
+  const candidates = exact ? [] : all.filter((p) =>
+    norm(p.lastName) === norm(lastName) &&
+    (dob ? p.dob === dob : false) &&
+    looksSameName(p.firstName, firstName));
+  return { exact, candidates };
+}
+
+export const getPatient = (id) => idb.get("patients", id);
+export const listPatients = () => idb.getAll("patients");
+
+/* ----------------------------------------------------------------- carriers */
+
+export async function findCarrier({ insName, payerId }) {
+  const all = await idb.getAll("carriers");
+  const key = carrierKey(insName);
+  const byName = all.find((c) => c.key === key || (c.aliases || []).includes(key));
+  if (byName) return byName;
+  // Payer ID is the strong key and the name is the weak one, which is what makes
+  // "AETNA" and "AETNA BETTER HEALTH OF TX" converge without a lookup table.
+  const pid = norm(payerId);
+  return (pid && all.find((c) => norm(c.payerId) === pid)) || null;
+}
+
+export const listCarriers = () => idb.getAll("carriers");
+export const getCarrier = (id) => idb.get("carriers", id);
+
+export async function upsertCarrier(patch) {
+  const existing = patch.id ? await idb.get("carriers", patch.id) : null;
+  const rec = {
+    id: patch.id || newId("car"), aliases: [], fieldsUpdatedAt: {}, confirmCount: {},
+    createdAt: nowISO(), ...existing, ...patch, updatedAt: nowISO(),
+  };
+  rec.key = carrierKey(rec.name);
+  await idb.put("carriers", rec);
+  return rec;
+}
+
+/* -------------------------------------------------------------------- cases */
+
+export async function findCase({ patientId, carrierId, policyId, serviceType }) {
+  const all = await idb.getAll("cases");
+  const key = caseKey(patientId, carrierId, policyId, serviceType);
+  const match = all.find((c) => c.caseKey === key) || null;
+  const candidates = match ? [] : findSimilarCases(all, { patientId, carrierId, policyId, serviceType });
+  return { match, candidates };
+}
+
+export const getCase = (id) => idb.get("cases", id);
+export const listCases = () => idb.getAll("cases");
+
+export async function getCaseHistory(caseId) {
+  const versions = await idb.byIndex("versions", "by_case", caseId);
+  return versions.sort((a, b) => a.seq - b.seq);
+}
+
+/* ------------------------------------------------------------------ prefill */
+
+// Everything known about this patient and payer before the call starts.
+//
+// Prefill reaches wider than history does: the case key includes the discipline so
+// PT and OT keep clean separate histories, but starting an OT verification for a
+// patient who had PT last month should still fill in the plan-level facts.
+export async function buildPrefill({ lastName, firstName, dob, insName, policyId, serviceType }) {
+  const { exact: patient, candidates } = await findPatient({ lastName, firstName, dob });
+  const carrier = insName ? await findCarrier({ insName }) : null;
+  if (!patient) return { form: {}, prov: {}, reference: null, patient: null, carrier, matchedCase: null, candidates };
+
+  const all = await idb.getAll("cases");
+  const mine = all.filter((c) => c.patientId === patient.id && !c.archived);
+  const pk = policyKey(policyId);
+  const sk = serviceKey(serviceType);
+
+  const sameService = mine.find((c) => c.policyKey === pk && c.serviceKey === sk);
+  const samePolicy = mine.find((c) => c.policyKey === pk);
+  const matchedCase = sameService || samePolicy || mine[0] || null;
+
+  const priorVersion = matchedCase?.latestVersionId ? await idb.get("versions", matchedCase.latestVersionId) : null;
+  const { form, prov } = buildPrefillForm({ patient, carrier, priorVersion, matchedCase });
+  return {
+    form, prov, reference: referenceFrom(priorVersion),
+    patient, carrier, matchedCase, priorVersion, candidates,
+    isSameCase: !!sameService,
+  };
+}
+
+/* --------------------------------------------------------------- the writer */
+
+// The only place anything is written. One transaction across every store, so a
+// half-saved record is not a state this app can reach.
+//
+// `resolve` answers the question saveVerification asks when it is not sure two
+// records are the same case. Without it, an ambiguous save returns
+// { status: "needs-decision" } and writes nothing.
+export async function saveVerification({ form, transcript, verify, completeness, meta, file, source, resolve }) {
+  // Everything that is not an IDB call happens up here. Awaiting anything once the
+  // transaction is open would let it auto-commit underneath us.
+  const patients = await idb.getAll("patients");
+  const carriers = await idb.getAll("carriers");
+  const cases = await idb.getAll("cases");
+
+  const pk = patientKey(form);
+  let patient = patients.find((p) => p.key === pk);
+  if (!patient) {
+    patient = {
+      id: newId("pat"), key: pk,
+      lastName: val(form, "lastName"), firstName: val(form, "firstName"), dob: val(form, "dob"),
+      lastNameNorm: norm(form.lastName), provisional: isProvisional(form),
+      createdAt: nowISO(), updatedAt: nowISO(), source: "manual",
+    };
+  }
+
+  const ck = carrierKey(form.insName) || "UNKNOWN";
+  let carrier = carriers.find((c) => c.key === ck || (c.aliases || []).includes(ck));
+  if (!carrier && val(form, "payerId")) {
+    const byPid = carriers.find((c) => norm(c.payerId) === norm(form.payerId));
+    if (byPid) { carrier = { ...byPid, aliases: [...new Set([...(byPid.aliases || []), ck])] }; }
+  }
+  if (!carrier) {
+    carrier = {
+      id: newId("car"), key: ck, name: val(form, "insName") || "UNKNOWN",
+      aliases: [], fieldsUpdatedAt: {}, confirmCount: {}, createdAt: nowISO(), updatedAt: nowISO(), source: "manual",
+    };
+  }
+
+  const key = caseKey(patient.id, carrier.id, form.policyId, form.serviceType);
+  let kase = cases.find((c) => c.caseKey === key);
+
+  if (!kase && !resolve) {
+    // A one-digit slip in a member ID would otherwise split a patient's deductible
+    // history in two, silently. Ask; never guess.
+    const similar = findSimilarCases(cases, {
+      patientId: patient.id, carrierId: carrier.id, policyId: form.policyId, serviceType: form.serviceType,
+    }).filter((s) => s.reason === "policy-typo");
+    if (similar.length) return { status: "needs-decision", reason: "policy-typo", candidates: similar };
+  }
+  if (resolve?.action === "same-case") kase = cases.find((c) => c.id === resolve.caseId) || kase;
+
+  const isNewCase = !kase;
+  if (isNewCase) {
+    kase = {
+      id: newId("case"), caseKey: key, patientId: patient.id, carrierId: carrier.id,
+      policyId: val(form, "policyId"), policyKey: policyKey(form.policyId),
+      groupId: val(form, "groupId"), planType: val(form, "planType"),
+      serviceType: val(form, "serviceType") || "PT", serviceKey: serviceKey(form.serviceType),
+      versionCount: 0, latest: null, latestVersionId: null,
+      firstVerifiedAt: "", lastVerifiedAt: "", policyHistory: [],
+      archived: false, createdAt: nowISO(), updatedAt: nowISO(),
+    };
+  } else if (resolve?.action === "same-case" && policyKey(form.policyId) !== kase.policyKey) {
+    kase = {
+      ...kase,
+      policyHistory: [...(kase.policyHistory || []), { from: kase.policyId, to: val(form, "policyId"), at: nowISO() }],
+      policyId: val(form, "policyId"), policyKey: policyKey(form.policyId),
+      caseKey: caseKey(patient.id, carrier.id, form.policyId, form.serviceType),
+    };
+  }
+
+  const prior = kase.latestVersionId ? await idb.get("versions", kase.latestVersionId) : null;
+  const snapshot = Object.fromEntries(F.map((k) => [k, val(form, k)]));
+  const changed = prior ? changedKeys(prior.form, snapshot) : [];
+
+  const versionId = newId("ver");
+  const version = {
+    id: versionId, caseId: kase.id, seq: (kase.versionCount || 0) + 1,
+    verifiedOn: val(form, "today") || nowISO().slice(0, 10),
+    savedAt: nowISO(), savedAtLabel: new Date().toLocaleString(),
+    form: snapshot, changed, provenance: meta || {},
+    verify: verify || {}, completeness: completeness || {},
+    file: file || "", source: source || "",
+    hasTranscript: !!(transcript || "").trim(),
+  };
+
+  // Only from values the operator typed AND the rep confirmed. Learning from a
+  // prefilled value would let a wrong carrier record re-confirm itself forever.
+  const learned = carrierLearnings(form, meta, verify);
+  const nextCarrier = { ...carrier, updatedAt: nowISO(), fieldsUpdatedAt: { ...carrier.fieldsUpdatedAt }, confirmCount: { ...carrier.confirmCount } };
+  for (const [k, value] of Object.entries(learned)) {
+    nextCarrier[k] = value;
+    nextCarrier.fieldsUpdatedAt[k] = nowISO();
+    nextCarrier.confirmCount[k] = (nextCarrier.confirmCount[k] || 0) + 1;
+  }
+
+  const nextCase = {
+    ...kase,
+    versionCount: version.seq, latest: snapshot, latestVersionId: versionId,
+    lastVerifiedAt: version.verifiedOn,
+    firstVerifiedAt: kase.firstVerifiedAt || version.verifiedOn,
+    groupId: val(form, "groupId") || kase.groupId,
+    planType: val(form, "planType") || kase.planType,
+    updatedAt: nowISO(),
+  };
+
+  await idb.tx(["patients", "carriers", "cases", "versions", "transcripts"], "readwrite", (s) => {
+    s.patients.put({ ...patient, updatedAt: nowISO() });
+    s.carriers.put(nextCarrier);
+    s.cases.put(nextCase);
+    s.versions.put(version);
+    if (version.hasTranscript) s.transcripts.put({ id: versionId, text: transcript });
+  });
+
+  await refreshMirror();
+  idb.requestPersistence();
+  return { status: "saved", caseId: nextCase.id, versionId, seq: version.seq, changed, isNewCase, learned: Object.keys(learned) };
+}
+
+/* ------------------------------------------------------------------- reads */
+
+export async function listRecent({ limit = 200 } = {}) {
+  const [cases, versions] = await Promise.all([idb.getAll("cases"), idb.getAll("versions")]);
+  const byCase = new Map(cases.map((c) => [c.id, c]));
+  return versions
+    .sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)))
+    .slice(0, limit)
+    .map((v) => toLegacyRow(v, byCase.get(v.caseId)));
+}
+
+export const getVersion = (id) => idb.get("versions", id);
+export const getTranscript = async (versionId) => (await idb.get("transcripts", versionId))?.text || "";
+
+export async function deleteVersion(id) {
+  const version = await idb.get("versions", id);
+  if (!version) return;
+  const rest = (await idb.byIndex("versions", "by_case", version.caseId)).filter((v) => v.id !== id);
+  const kase = await idb.get("cases", version.caseId);
+  const newest = rest.sort((a, b) => a.seq - b.seq).pop() || null;
+  await idb.tx(["versions", "transcripts", "cases"], "readwrite", (s) => {
+    s.versions.delete(id);
+    s.transcripts.delete(id);
+    if (!kase) return;
+    if (!rest.length) s.cases.delete(kase.id);
+    else s.cases.put({ ...kase, versionCount: rest.length, latest: newest.form, latestVersionId: newest.id, lastVerifiedAt: newest.verifiedOn });
+  });
+  await refreshMirror();
+}
+
+export async function clearAll() {
+  await idb.tx(["patients", "carriers", "cases", "versions", "transcripts", "imports"], "readwrite", (s) => {
+    for (const k of Object.keys(s)) s[k].clear();
+  });
+  storeLegacy([]);
+}
+
+/* ------------------------------------------------------------------ import */
+
+// Rows land in patients/carriers; only the mapping and the counts are kept in
+// `imports`. Prefill reads patients/carriers and never the import, which is what
+// keeps precedence a simple static table instead of a search across sources.
+//
+// Existing values win by default. A stale roster must not overwrite something a
+// call confirmed — it only fills what is blank.
+export async function applyImport({ kind, rows, mapping, fileName, sheetName }) {
+  const patients = await idb.getAll("patients");
+  const carriers = await idb.getAll("carriers");
+  const byPatient = new Map(patients.map((p) => [p.key, p]));
+  const byCarrier = new Map(carriers.map((c) => [c.key, c]));
+
+  const writes = { patients: [], carriers: [] };
+  const counts = { created: 0, updated: 0, skipped: 0 };
+
+  for (const row of rows) {
+    const v = row.values || {};
+    if (row.action === "skip") { counts.skipped++; continue; }
+
+    if (kind === "carriers") {
+      const key = carrierKey(v.insName);
+      if (!key) { counts.skipped++; continue; }
+      const existing = byCarrier.get(key);
+      const rec = existing
+        ? { ...existing, updatedAt: nowISO() }
+        : { id: newId("car"), key, name: v.insName, aliases: [], fieldsUpdatedAt: {}, confirmCount: {}, createdAt: nowISO(), updatedAt: nowISO(), source: "import" };
+      let touched = !existing;
+      for (const f of CARRIER_FIELDS) {
+        if (v[f] && !rec[f]) { rec[f] = v[f]; rec.fieldsUpdatedAt = { ...rec.fieldsUpdatedAt, [f]: nowISO() }; touched = true; }
+      }
+      if (touched) { writes.carriers.push(rec); byCarrier.set(key, rec); existing ? counts.updated++ : counts.created++; }
+      else counts.skipped++;
+      continue;
+    }
+
+    const key = patientKey(v);
+    const existing = byPatient.get(key);
+    if (existing) {
+      const rec = { ...existing };
+      let touched = false;
+      for (const f of ["lastName", "firstName", "dob"]) if (v[f] && !rec[f]) { rec[f] = v[f]; touched = true; }
+      if (touched) { rec.updatedAt = nowISO(); rec.provisional = isProvisional(rec); writes.patients.push(rec); counts.updated++; }
+      else counts.skipped++;
+      continue;
+    }
+    const rec = {
+      id: newId("pat"), key,
+      lastName: v.lastName || "", firstName: v.firstName || "", dob: v.dob || "",
+      lastNameNorm: norm(v.lastName), provisional: isProvisional(v),
+      createdAt: nowISO(), updatedAt: nowISO(), source: "import",
+    };
+    writes.patients.push(rec);
+    byPatient.set(key, rec);
+    counts.created++;
+  }
+
+  const record = {
+    id: newId("imp"), fileName: fileName || "", sheetName: sheetName || "", kind,
+    mapping, rowCount: rows.length, counts, importedAt: nowISO(),
+  };
+
+  await idb.tx(["patients", "carriers", "imports"], "readwrite", (s) => {
+    for (const p of writes.patients) s.patients.put(p);
+    for (const c of writes.carriers) s.carriers.put(c);
+    s.imports.put(record);
+  });
+  return counts;
+}
+
+export const listImports = () => idb.getAll("imports");
+
+// The keys parseRows() needs in order to flag a row as already on file.
+export async function patientKeySet() {
+  return new Set((await idb.getAll("patients")).map((p) => p.key));
+}
+
+/* ------------------------------------------------------------------ backup */
+
+export async function exportAll() {
+  const names = ["patients", "carriers", "cases", "versions", "transcripts", "imports"];
+  const data = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await idb.getAll(n)])));
+  await idb.setMeta("lastBackupAt", nowISO());
+  return { app: "us24-vob", schemaVersion: 2, exportedAt: nowISO(), ...data };
+}
+
+export async function importAll(bundle, { mode = "merge" } = {}) {
+  const names = ["patients", "carriers", "cases", "versions", "transcripts", "imports"];
+  await idb.tx(names, "readwrite", (s) => {
+    for (const n of names) {
+      if (mode === "replace") s[n].clear();
+      for (const rec of bundle[n] || []) s[n].put(rec);
+    }
+  });
+  await refreshMirror();
+}
+
+export const lastBackupAt = () => idb.getMeta("lastBackupAt");
+
+/* ------------------------------------------------------------------ mirror */
+
+// localStorage keeps a slim, transcript-free copy so the legacy standalone
+// US24_VOB_Generator_5.html still lists and exports records — while the ~5 MB
+// quota, which a dozen long transcripts used to exhaust, stops being a factor.
+async function refreshMirror() {
+  try {
+    const rows = await listRecent({ limit: MIRROR_ROWS });
+    const slim = rows.map((r) => ({ ...r, _transcript: "" }));
+    try { storeLegacy(slim); }
+    catch { try { storeLegacy(slim.slice(0, 20)); } catch { storeLegacy([]); } }
+  } catch { /* the mirror is a convenience; never fail a save over it */ }
+}

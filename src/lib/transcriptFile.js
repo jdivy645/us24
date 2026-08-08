@@ -32,7 +32,7 @@ export function buildTranscriptTxt(v, transcript, result) {
       ? `${result.verdict}  (${result.matched} of ${result.total} details confirmed against the call)`
       : result.verdict === "UNVERIFIED"
         ? "UNVERIFIED  (no key form details were available to check)"
-        : "NO AUDIO  (no recording or transcript for this verification)";
+        : "NO TRANSCRIPT  (nothing was attached for this verification)";
 
   const lines = [
     "US24 SOLUTIONS — VERIFICATION CALL TRANSCRIPT",
@@ -80,7 +80,7 @@ export function buildTranscriptTxt(v, transcript, result) {
         ? `VERDICT: REJECTED — ${mismatches.length} contradicted, ${notHeard.length} not heard.`
         : result.verdict === "UNVERIFIED"
           ? "VERDICT: UNVERIFIED — the form had no key details to check against the transcript."
-          : "VERDICT: NO AUDIO — no recording or transcript for this verification.",
+          : "VERDICT: NO TRANSCRIPT — nothing was attached for this verification.",
     comp.incomplete
       ? `FORM: INCOMPLETE — ${comp.count} required field(s) were left blank.`
       : `FORM: COMPLETE — all ${comp.required} required fields were answered.`,

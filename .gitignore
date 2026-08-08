@@ -8,6 +8,10 @@ dist/
 .env.*
 !.env.example
 
+# Call transcripts pulled by tools/rc-fetch.mjs contain PHI — never commit them.
+transcripts/
+tools/.env
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

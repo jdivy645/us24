@@ -20,8 +20,8 @@ export function Checklist({ checks }) {
   );
 }
 
-export default function TranscriptView({ v, transcript, result }) {
-  const res = result || checkTranscript(v, transcript);
+export default function TranscriptView({ v, transcript, result, meta }) {
+  const res = result || checkTranscript(v, transcript, meta);
   const spans = spansFromChecks(res.checks);
   const parts = [];
   let pos = 0;

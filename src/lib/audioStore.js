@@ -1,11 +1,17 @@
-// Call audio blobs live in IndexedDB (localStorage is text-only and too small);
-// keyed by the record's _id. Callers .catch(() => {}) — a storage failure must
-// never block a save, the audio is also downloaded as a file.
+// Legacy store. Audio upload was removed — the app now takes transcripts directly —
+// but records saved before that still have a blob here, keyed by the record's _id,
+// and the log's "Audio" button must keep working for them. Read and delete only:
+// nothing writes to this store any more.
 const DB = "us24_vob", STORE = "audio";
 
 const open = () => new Promise((res, rej) => {
   const q = indexedDB.open(DB, 1);
-  q.onupgradeneeded = () => q.result.createObjectStore(STORE);
+  // Guarded: the data layer opens this same database at a higher version, and an
+  // unconditional createObjectStore throws ConstraintError on every existing install.
+  q.onupgradeneeded = () => {
+    const db = q.result;
+    if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+  };
   q.onsuccess = () => res(q.result);
   q.onerror = () => rej(q.error);
 });
@@ -22,7 +28,6 @@ const tx = (mode, fn) => open().then((db) => new Promise((res, rej) => {
   t.onabort = () => { db.close(); rej(t.error || new DOMException("Transaction aborted", "AbortError")); };
 }));
 
-export const putAudio = (id, blob) => tx("readwrite", (s) => s.put(blob, id));
 export const getAudio = (id) => tx("readonly", (s) => s.get(id));
 export const delAudio = (id) => tx("readwrite", (s) => s.delete(id));
 export const clearAudio = () => tx("readwrite", (s) => s.clear());

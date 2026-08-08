@@ -1,22 +1,70 @@
 // Transcript ↔ form verification engine. Pure functions, no React.
 //
-// A check ends in one of four states:
+// A check ends in one of these states:
 //   found     the typed value was heard
 //   mismatch  the call says something DIFFERENT (or the opposite, for yes/no)
 //   missing   the typed value was never heard
+//   elsewhere the value was spoken, but about some other field
 //   quiet     the topic never came up (yes/no + enum only — never fails a record)
+//   bypassed  the operator marked it unobtainable, with a recorded reason
+//   carrier   the value came from carrier/portal data, not from this call
 //
 // Gates: "hard" fields must be found; "contra" fields fail only on a contradiction
 // (they are answer selects — silence means the rep never covered it, not an error);
 // "soft" fields are advisory and never affect the verdict.
+//
+// A found check may additionally carry `dispute`: the typed value WAS said, but a
+// rival value was stated about the same field too. See the contested pass below.
 import { ANCHORS, HEAD_IX, OWN_Q, SIB_Q, MTYPE, TOPIC_TOKENS, FAMILY, KEYWORDS, KEYWORD_WINDOW } from "./anchors.js";
+import { isBypassed, bypassOf, isCarrier } from "./bypass.js";
+import { roleAt } from "./transcriptParse.js";
+
+// A verifier's most common move is to read a value back for confirmation:
+// "the member has a 20% coinsurance, right?" — and the rep answers "30%. Yes."
+// The rival value carries no topic word of its own, so no anchor can reach it;
+// the only thing that identifies it is that it answers a question which named the
+// value. Catching that needs turn structure rather than proximity.
+function findTurnDispute(prep, ranges, f, check) {
+  const m = ANCHORS[f.key] && ANCHORS[f.key].m;
+  if (!m || m === "none" || m === "yesno" || m === "enum2") return null;
+  const formNorm = normForm(m, check.value);
+  if (formNorm == null) return null;
+
+  // Find every place our agent says this value, not just the span that confirmed
+  // the field — the read-back is usually a later restatement.
+  const all = candidatesFor(prep, f.key, m, formNorm);
+  const readBacks = all.filter((c) => sameValue(m, formNorm, c.norm) && roleAt(ranges, c.s) === "agent");
+  if (!readBacks.length) return null;
+
+  for (const rb of readBacks) {
+    const qi = ranges.findIndex((r) => rb.s >= r.start && rb.s < r.end);
+    if (qi < 0) continue;
+    const ans = ranges[qi + 1];
+    if (!ans || ans.role !== "rep") continue;
+    // Only a short, direct answer. A long reply has moved on to another subject.
+    if (ans.end - ans.start > 90) continue;
+    const rival = all.find((c) => c.s >= ans.start && c.e <= ans.end && !sameValue(m, formNorm, c.norm));
+    if (!rival) continue;
+    return {
+      heard: prep.text.slice(rival.s, rival.e).trim(),
+      heardSpans: [{ start: rival.s, end: rival.e }],
+      score: 0.8,
+      viaAnswer: true,
+    };
+  }
+  return null;
+}
 
 export const VERIFY_FIELDS = [
-  { key: "lastName", label: "Last name", type: "name", gate: "hard" },
-  { key: "firstName", label: "First name", type: "name", gate: "hard" },
-  { key: "dob", label: "Date of birth", type: "date", gate: "hard" },
-  { key: "insName", label: "Insurance", type: "tokens", gate: "hard" },
-  { key: "policyId", label: "Policy ID", type: "id", gate: "hard" },
+  // identity: true marks the fields the PROVIDER supplies to identify the member.
+  // The call flows the other way for these — our agent reads them out and the rep
+  // looks the member up — so hearing them in our own agent's voice is exactly what
+  // confirmation looks like. Every other field must come from the rep.
+  { key: "lastName", label: "Last name", type: "name", gate: "hard", identity: true },
+  { key: "firstName", label: "First name", type: "name", gate: "hard", identity: true },
+  { key: "dob", label: "Date of birth", type: "date", gate: "hard", identity: true },
+  { key: "insName", label: "Insurance", type: "tokens", gate: "hard", identity: true },
+  { key: "policyId", label: "Policy ID", type: "id", gate: "hard", identity: true },
   { key: "groupId", label: "Group ID", type: "id", gate: "hard" },
   { key: "payerId", label: "Payer ID", type: "id", gate: "hard" },
   { key: "effDate", label: "Effective date", type: "date", gate: "hard" },
@@ -43,8 +91,13 @@ export const VERIFY_FIELDS = [
   { key: "callRef", label: "Call reference", type: "id", gate: "hard" },
   { key: "secName", label: "Secondary insurance", type: "tokens", gate: "hard" },
   { key: "secPolicy", label: "Secondary policy ID", type: "id", gate: "hard" },
+  // The visit threshold for authorization. Hard on purpose: if a threshold was
+  // typed, the call is where it came from, and getting it wrong changes when the
+  // practice must stop treating.
+  { key: "authAfter", label: "Auth after visit #", type: "number", gate: "hard" },
   // answer selects — contradiction fails, silence is quiet
-  { key: "network", label: "Network status", type: "enum", gate: "contra" },
+  { key: "network", label: "Network status (group)", type: "enum", gate: "contra" },
+  { key: "networkInd", label: "Network status (ind. provider)", type: "enum", gate: "contra" },
   { key: "copay", label: "Co-pay", type: "yesno", gate: "contra" },
   { key: "coins", label: "Co-insurance", type: "yesno", gate: "contra" },
   { key: "dedApply", label: "Deductible applies", type: "yesno", gate: "contra" },
@@ -53,13 +106,27 @@ export const VERIFY_FIELDS = [
   { key: "referral", label: "Referral required", type: "yesno", gate: "contra" },
   { key: "pcpRef", label: "PCP referral", type: "yesno", gate: "contra" },
   { key: "hasSec", label: "Secondary on file", type: "yesno", gate: "contra" },
-  // advisory
+  // advisory — surfaced on the checklist, never able to fail a record
   { key: "insPhone", label: "Payer phone", type: "phone", gate: "soft" },
   { key: "authDates", label: "Auth coverage dates", type: "tokens", gate: "soft" },
   { key: "claimAddr", label: "Claim mailing address", type: "tokens", gate: "soft" },
+  { key: "serviceType", label: "Service type", type: "tokens", gate: "soft" },
+  { key: "termDate", label: "Termination date", type: "date", gate: "soft" },
+  { key: "primary", label: "Primary payer", type: "tokens", gate: "soft" },
+  { key: "secPlan", label: "Secondary plan", type: "tokens", gate: "soft" },
+  { key: "secEff", label: "Secondary effective date", type: "date", gate: "soft" },
+  { key: "secDed", label: "Secondary deductible", type: "money", gate: "soft" },
+  { key: "secVisit", label: "Secondary visit limit", type: "number", gate: "soft" },
+  { key: "secUsed", label: "Secondary used limit", type: "number", gate: "soft" },
+  // Deliberately never verified: `today` and `verifiedBy` are internal bookkeeping
+  // and `note` is generated from the other fields. Their absence here is a
+  // decision, not an oversight.
 ];
 
 const norm = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+// Values that answer a field by saying it does not apply. Nothing to check them
+// against, so they leave the checklist. An explicit bypass in `meta` is the
+// auditable version of the same thing — see bypass.js.
 const SKIP = new Set(["", "NA", "NONE", "TBD", "TBA", "CURRENT", "UNKNOWN", "PENDING", "NOTPROVIDED"]);
 export const isSkipped = (value) => SKIP.has(norm(value));
 
@@ -282,12 +349,40 @@ export function prepTranscript(text) {
     prevNum = true;
   }
   const clauses = segment(text, toks);
+  // Stamp each token with its own index. Several hot paths need to get back from
+  // a token to its position, and doing that with indexOf inside a loop turns a
+  // two-hour transcript into a quadratic scan.
+  toks.forEach((tk, i) => { tk.ix = i; });
   return { text, toks, clauses, digitStream, digitMap, punct: /[.?!]/.test(text) };
 }
 
+// First token whose span reaches `pos`, by binary search over the token list.
+function tokenAt(toks, pos) {
+  let lo = 0, hi = toks.length - 1, ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (toks[mid].end > pos) { ans = mid; hi = mid - 1; } else lo = mid + 1;
+  }
+  return ans;
+}
+
 // The same transcript is prepped by App's memo, TranscriptView and the .txt export.
-let _cache = { text: null, prep: null };
-export const getPrep = (t) => (_cache.text === t ? _cache.prep : (_cache = { text: t, prep: prepTranscript(t) }).prep);
+// Two entries, not one: with the transcript modal open the live panel and the
+// modal alternate between two different records, and a single slot would make
+// every keystroke re-tokenise the whole call from scratch.
+const _cache = [];
+export const getPrep = (t) => {
+  const hit = _cache.findIndex((e) => e.text === t);
+  if (hit >= 0) {
+    const e = _cache.splice(hit, 1)[0];
+    _cache.unshift(e);
+    return e.prep;
+  }
+  const prep = prepTranscript(t);
+  _cache.unshift({ text: t, prep });
+  if (_cache.length > 2) _cache.pop();
+  return prep;
+};
 
 const valueTokens = (value) => prepTranscript(value).toks.map((x) => x.t);
 
@@ -380,6 +475,11 @@ function matchId(prep, value) {
   const variants = [digits];
   const stripped = digits.replace(/^0+/, "");
   if (stripped !== digits && stripped.length >= 4) variants.push(stripped);
+  // Member IDs routinely carry a person-code suffix — "106723434-01" is member 01
+  // on policy 106723434 — and the rep works from the base. Accept the base too,
+  // but only when it is long enough to identify anyone on its own.
+  const base = String(value).split(/[-\s/]/)[0].replace(/\D/g, "");
+  if (base && base !== digits && base.length >= 6) variants.push(base);
   for (const d of variants) {
     const r = digitSearch(prep, d);
     if (!r.found) continue;
@@ -447,7 +547,7 @@ function matchDate(prep, value) {
       from = i + 1;
       const a = prep.digitMap[i], b = prep.digitMap[i + ds.length - 1];
       if (!a || !b) continue;
-      const ia = prep.toks.indexOf(a), ib = prep.toks.indexOf(b);
+      const ia = a.ix, ib = b.ix;
       // must begin a spoken number and span few tokens, so a date pattern can't
       // be sliced out of a long digit-by-digit readout
       const runStart = !prep.toks[ia - 1] || !prep.toks[ia - 1].num;
@@ -577,6 +677,7 @@ const POS_PHRASES = [["is", "required"], ["does", "require"], ["we", "require"],
   ["mandatory"], ["subject", "to"], ["does", "have"], ["do", "have"], ["there", "is", "a"], ["they", "have", "a"], ["carries", "a"]];
 const MET_PHRASES = [["has", "been", "met"], ["been", "met"], ["already", "met"], ["fully", "met"], ["is", "satisfied"], ["has", "met"]];
 const NEG_W = new Set(["no", "nope", "nah", "not", "none", "never", "nothing", "without", "waived", "waive", "exempt", "excluded", "nil"]);
+const DISCOURSE = new Set(["well", "oh", "um", "uh", "okay", "ok", "so", "actually", "sorry"]);
 const NEG_CONTR = new Set(["don", "doesn", "isn", "aren", "wasn", "weren", "hasn", "haven", "didn", "won", "couldn", "shouldn", "wouldn", "cannot"]);
 const POS_W = new Set(["required", "requires", "require", "applies", "apply", "applicable", "needed", "needs", "need", "mandatory", "necessary", "yes", "does", "do"]);
 const EVAL_Q = new Set(["eval", "evaluation", "initial", "assessment", "evaluations"]);
@@ -602,8 +703,16 @@ function polarityMarkers(cl, toks, text) {
       if (ok) out.push({ i: at(i), pol: "YES", strength: 3 });
     }
   }
+  // "Well no, the deductible remaining is 473.76" corrects what the other party
+  // just said and then states a figure. The "no" answers the previous turn; it is
+  // not a claim that there is no deductible. Only a clause-leading "no" that goes
+  // on to give a number is read this way — "no copay" keeps its plain meaning.
+  const isCorrection = (k) =>
+    w[k] === "no" && w.slice(0, k).every((x) => DISCOURSE.has(x)) &&
+    toks.slice(cl.i0 + k + 1, cl.i1).some((t) => t.num);
+
   for (let k = 0; k < w.length; k++) {
-    if (NEG_W.has(w[k])) out.push({ i: at(k), pol: "NO", strength: 3 });
+    if (NEG_W.has(w[k])) { if (!isCorrection(k)) out.push({ i: at(k), pol: "NO", strength: 3 }); }
     else if (NEG_CONTR.has(w[k]) && w[k + 1] === "t") out.push({ i: at(k), pol: "NO", strength: 3 });
     else if (POS_W.has(w[k])) out.push({ i: at(k), pol: "YES", strength: 2 });
   }
@@ -761,7 +870,13 @@ export function decideYesNo(prep) {
  * ------------------------------------------------------------------ */
 
 const WIN = { money: [10, 4], percent: [8, 4], count: [8, 4], duration: [10, 4], date: [10, 4], id: [12, 4], phone: [12, 4] };
-const MIN_TOKENS = 25, TAIL_GUARD = 3, MISMATCH_MIN = 0.55, AMBIG_GAP = 0.15, MAX_HITS = 8;
+// MAX_HITS used to be 8, which silently capped contradiction hunting at the first
+// eight mentions of a topic. On a two-hour call a figure restated differently at
+// minute 95 was invisible and the record read APPROVED — a wrong verdict, not just
+// thin coverage. The cap is now a sanity bound; candidatesInWindow() is what keeps
+// the cost down, by binary-searching the token-ordered candidate list instead of
+// walking all of it per site.
+const MIN_TOKENS = 25, TAIL_GUARD = 3, MISMATCH_MIN = 0.55, AMBIG_GAP = 0.15, MAX_HITS = 500;
 const HEDGE = new Set(["approximately", "about", "around", "roughly", "maybe", "think", "believe", "check", "sure", "either", "up", "or"]);
 
 function scanAnchors(prep) {
@@ -782,6 +897,72 @@ function scanAnchors(prep) {
   }
   prep._sites = sites;
   return sites;
+}
+
+// A benefits call is question-and-answer, and the answer rarely repeats the
+// subject: "What is the individual deductible?" / "$3,000." The value the rep gave
+// has no anchor of its own, so on a transcript with speakers an answer turn that
+// contains no anchor inherits the anchors of the question that prompted it,
+// projected onto the front of the answer. Without this the engine can only see
+// values the rep happened to restate the topic for.
+// Character offset -> turn index, or null when the transcript has no speakers.
+function turnIndexer(prep, ranges) {
+  if (!ranges) return null;
+  return (pos) => {
+    let lo = 0, hi = ranges.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (pos < ranges[mid].start) hi = mid - 1;
+      else if (pos >= ranges[mid].end) lo = mid + 1;
+      else return mid;
+    }
+    return -1;
+  };
+}
+
+function anchorSites(prep, ranges) {
+  const base = scanAnchors(prep);
+  if (!ranges) return base;
+  if (prep._qaSites) return prep._qaSites;
+
+  const turnAt = (pos) => ranges.findIndex((r) => pos >= r.start && pos < r.end);
+  const firstTok = new Map();   // turn index -> first token index
+  const tokTurn = [];
+  prep.toks.forEach((tk, ix) => {
+    const t = turnAt(tk.start);
+    tokTurn[ix] = t;
+    if (t >= 0 && !firstTok.has(t)) firstTok.set(t, ix);
+  });
+
+  const sitesByTurn = new Map();
+  for (const s of base) {
+    const t = tokTurn[s.i];
+    if (t < 0) continue;
+    if (!sitesByTurn.has(t)) sitesByTurn.set(t, []);
+    sitesByTurn.get(t).push(s);
+  }
+
+  const extra = [];
+  for (let t = 1; t < ranges.length; t++) {
+    if (ranges[t].role !== "rep" || sitesByTurn.has(t)) continue;
+    // Walk back over the rep's own filler ("1 moment.") to the question.
+    let q = t - 1;
+    while (q >= 0 && !sitesByTurn.has(q) && t - q <= 3) q--;
+    if (q < 0 || !sitesByTurn.has(q) || ranges[q].role === "rep") continue;
+    const at = firstTok.get(t);
+    if (at == null) continue;
+    // Only an unambiguous question hands its subject on. "What is the individual
+    // deductible and individual out of pocket?" names two topics, and a single
+    // "$3,000" answer belongs to one of them — inheriting both would let the
+    // deductible figure contradict the out-of-pocket field.
+    const asked = sitesByTurn.get(q);
+    const keys = new Set(asked.flatMap((s) => [...s.keys]));
+    if (keys.size !== 1) continue;
+    extra.push({ i: at, j: at, keys, text: asked[0].text, inherited: true });
+  }
+
+  prep._qaSites = extra.length ? [...base, ...extra].sort((a, b) => a.i - b.i) : base;
+  return prep._qaSites;
 }
 
 function scanCands(prep) {
@@ -876,7 +1057,7 @@ const sameValue = (m, a, b) => {
 
 const fmtHeard = (prep, c) => prep.text.slice(c.s, c.e).trim();
 
-function findMismatch(prep, f, value, confirmed) {
+function findMismatch(prep, f, value, confirmed, ranges) {
   const spec = ANCHORS[f.key];
   const m = spec && spec.m;
   if (!m || m === "none" || m === "yesno" || m === "enum2") return null;
@@ -884,23 +1065,51 @@ function findMismatch(prep, f, value, confirmed) {
   const formNorm = normForm(m, value);
   if (formNorm == null) return null;
 
-  const sites = scanAnchors(prep).filter((s) => s.keys.has(f.key));
+  const sites = anchorSites(prep, ranges).filter((s) => s.keys.has(f.key));
   if (!sites.length) return null;
   const usable = sites.filter((s) => s.j <= prep.toks.length - TAIL_GUARD).slice(0, MAX_HITS);
   if (!usable.length) return null;
 
-  const cands = candidatesFor(prep, f.key, m, formNorm);
+  let cands = candidatesFor(prep, f.key, m, formNorm);
+  // Only the rep can contradict. Our own agent misreading a figure back ("you
+  // told me 18 days") must never be quoted as what the call said.
+  if (ranges) cands = cands.filter((c) => roleAt(ranges, c.s) !== "agent");
   if (!cands.length) return null;
   const own = OWN_Q.get(f.key) || new Set(), sib = SIB_Q.get(f.key) || new Set();
   const [fwd, back] = WIN[m] || [10, 4];
-  const allSites = scanAnchors(prep);
+  // Within one speaker's turn the subject and its value belong together whatever
+  // the word order — "180 days from the date of service for original submission"
+  // states the value first. The tight window exists to stop a value drifting onto
+  // a neighbouring topic, and on a transcript with speakers the turn boundary
+  // already does that job.
+  const turnOf = turnIndexer(prep, ranges);
+  const SAME_TURN = 24;
+  const allSites = anchorSites(prep, ranges);
   const fam = FAMILY[m];
   const scored = [];
 
+  // candidatesFor() returns tokens in order, so the handful inside a site's window
+  // can be found by binary search rather than by scanning every candidate.
+  const lowerBound = (ti) => {
+    let lo = 0, hi = cands.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (cands[mid].ti < ti) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
+
   for (const site of usable) {
-    for (const c of cands) {
+    const reach = Math.max(fwd, back, SAME_TURN);
+    const from = lowerBound(site.i - reach);
+    const to = lowerBound(site.j + reach + 1);
+    for (let ci = from; ci < to; ci++) {
+      const c = cands[ci];
       const dist = c.ti >= site.j ? c.ti - site.j : site.i - c.ti;
-      if (c.ti >= site.j ? dist > fwd : dist > back) continue;
+      // Proximity in a dialogue must respect who is speaking: a subject named in
+      // the question does not reach across into an unrelated part of the answer.
+      // Sites projected by anchorSites() are the deliberate exception.
+      const sameTurn = turnOf && !site.inherited && turnOf(c.s) === turnOf(prep.toks[site.i].start);
+      if (turnOf && !site.inherited && !sameTurn) continue;
+      const limit = sameTurn ? SAME_TURN : (c.ti >= site.j ? fwd : back);
+      if (dist > limit) continue;
       if (sameValue(m, formNorm, c.norm)) continue; // agrees — not a mismatch
 
       // qualifier arbitration inside the group
@@ -915,9 +1124,14 @@ function findMismatch(prep, f, value, confirmed) {
       if (!spec.base && spec.g && dOwn === Infinity) continue;
       if (spec.base && dSib !== Infinity) continue;
 
-      // a nearer anchor of the same family owns this number
+      // a nearer anchor of the same family owns this number — but only one spoken
+      // in the same turn. A topic the other party named as their question ends
+      // ("...and for corrected claims?") sits adjacent to the first word of the
+      // answer without having any claim on it.
+      const cTurn = turnOf ? turnOf(c.s) : null;
       let nearest = null, nd = Infinity;
       for (const s2 of allSites) {
+        if (turnOf && turnOf(prep.toks[s2.i].start) !== cTurn) continue;
         let sameFam = false;
         for (const k2 of s2.keys) if (FAMILY[MTYPE.get(k2)] === fam) { sameFam = true; break; }
         if (!sameFam) continue;
@@ -1006,7 +1220,7 @@ function occurrences(prep, f, value) {
     let from = 0, i;
     while ((i = prep.digitStream.indexOf(digits, from)) >= 0) {
       const tk = prep.digitMap[i];
-      if (tk) out.push(prep.toks.indexOf(tk));
+      if (tk) out.push(tk.ix);
       from = i + 1;
     }
     return out;
@@ -1020,13 +1234,23 @@ function occurrences(prep, f, value) {
   return out;
 }
 
+// True when at least one span sits in a turn the insurance rep spoke. Unattributed
+// text counts as the rep so a plain transcript loses nothing.
+function saidByRep(ranges, spans) {
+  if (!ranges || !spans.length) return true;
+  return spans.some((s) => {
+    const role = roleAt(ranges, s.start);
+    return role === "rep" || role === "unknown";
+  });
+}
+
 function spokenAboutField(prep, key, spans) {
   if (!KEYWORDS[key] || !spans.length) return true; // no keyword list — nothing to check against
   const index = keywordIndex(prep);
   // Judge each occurrence on its own: one of them being spoken about this field
   // is enough, and distances from different occurrences must never be mixed.
   for (const s of spans) {
-    const ti = prep.toks.findIndex((t) => t.end > s.start);
+    const ti = tokenAt(prep.toks, s.start);
     if (ti < 0) continue;
     let own = Infinity, other = Infinity;
     for (const [i, keys] of index) {
@@ -1072,16 +1296,29 @@ function matchPresence(prep, f, value) {
   }
 }
 
-export function checkTranscript(v, transcript) {
+// meta (optional) carries per-field bypasses and provenance — see bypass.js.
+// Omitting it verifies exactly as before, which is what keeps saved records that
+// predate the feature rendering with the verdict they were saved with.
+export function checkTranscript(v, transcript, meta, opts = {}) {
   const t = (transcript || "").trim();
   const prep = t ? getPrep(t) : null;
   const yn = prep ? decideYesNo(prep) : null;
   const checks = [];
+  // Speaker ranges from transcriptParse(). Absent for a plain transcript, in which
+  // case every match counts — which is exactly how the engine behaved before.
+  const ranges = opts.ranges && opts.ranges.some((r) => r.role === "rep") ? opts.ranges : null;
 
   for (const f of VERIFY_FIELDS) {
     const value = String(v[f.key] || "").trim();
-    if (!value || isSkipped(value)) continue;
     const base = { key: f.key, label: f.label, value, gate: f.gate, soft: f.gate === "soft" };
+    // Checked before the blank test on purpose: a bypassed field is usually blank
+    // precisely BECAUSE it could not be obtained, and that is the case whose reason
+    // most needs to stay visible.
+    if (isBypassed(meta, f.key)) {
+      checks.push({ ...base, status: "bypassed", found: false, spans: [], bypass: bypassOf(meta, f.key) });
+      continue;
+    }
+    if (!value || isSkipped(value)) continue;
     if (!prep) { checks.push({ ...base, status: "missing", found: false, spans: [] }); continue; }
 
     if (f.type === "yesno" || (f.type === "enum" && f.gate === "contra")) {
@@ -1102,6 +1339,21 @@ export function checkTranscript(v, transcript) {
     }
 
     const r = matchPresence(prep, f, value);
+    // Our own agent reading a figure back is not the payer confirming it. If the
+    // match lands only in an agent turn, look for the rep saying it too before
+    // settling for "echo".
+    if (r.found && ranges && !f.identity && !saidByRep(ranges, r.spans)) {
+      let repSaid = null;
+      for (const ix of occurrences(prep, f, value)) {
+        const s = [{ start: prep.toks[ix].start, end: prep.toks[ix].end }];
+        if (saidByRep(ranges, s) && spokenAboutField(prep, f.key, s)) { repSaid = s; break; }
+      }
+      if (repSaid) r.spans = repSaid;
+      else {
+        checks.push({ ...base, status: "echo", found: false, spans: [], heardSpans: r.spans });
+        continue;
+      }
+    }
     if (r.found && !spokenAboutField(prep, f.key, r.spans)) {
       // the first mention was about something else — is there another one that
       // the call really did state for this field?
@@ -1165,22 +1417,88 @@ export function checkTranscript(v, transcript) {
   if (prep) {
     const confirmed = checks.filter((c) => c.found).flatMap((c) => c.spans);
     for (const c of checks) {
-      if (c.status !== "missing" && c.status !== "elsewhere") continue;
+      if (c.status !== "missing" && c.status !== "elsewhere" && c.status !== "echo") continue;
       const f = VERIFY_FIELDS.find((x) => x.key === c.key);
-      const mm = findMismatch(prep, f, c.value, confirmed);
+      const mm = findMismatch(prep, f, c.value, confirmed, ranges);
       if (mm) Object.assign(c, { status: "mismatch", ...mm });
+    }
+
+    // Provenance. A value taken from carrier master data or the payer portal was
+    // never going to be spoken, so it must not read as "the rep didn't say it".
+    // This runs AFTER the mismatch pass on purpose: provenance excuses silence,
+    // never a contradiction. A carrier record saying the filing limit is 90 days
+    // when the rep says 180 is the single most valuable thing this engine finds.
+    for (const c of checks) {
+      if ((c.status === "missing" || c.status === "elsewhere" || c.status === "echo") && isCarrier(meta, c.key)) {
+        c.status = "carrier";
+        c.source = (meta[c.key] || {}).source;
+      }
+    }
+
+    // Contested values. findMismatch only runs on checks that were NOT found, so
+    // a rep who says "twenty percent" and later "thirty percent" goes unnoticed —
+    // the typed 20% matches the first mention and the check closes. Re-run the
+    // search on found checks WITHOUT excluding their own spans, so a rival value
+    // for the same field surfaces. This does not fail the record (the typed value
+    // genuinely was said) but the verifier has to pick a side.
+    // Another field's own typed value is not a rival — "$6,500 out of pocket,
+    // remaining $5,473.76" must not read as the remaining amount being disputed
+    // by the maximum.
+    const typedElsewhere = checks.map((c) => c.value).filter(Boolean);
+    const isAnotherFieldsValue = (key, m, heard) => {
+      const h = normForm(m, heard);
+      if (h == null) return false;
+      return typedElsewhere.some((val, i) => checks[i].key !== key && sameValue(m, normForm(m, val), h));
+    };
+    for (const c of checks) {
+      if (c.status !== "found" || c.soft) continue;
+      const f = VERIFY_FIELDS.find((x) => x.key === c.key);
+      if (!f || ANCHORS[f.key]?.m === "none") continue;
+      const others = checks.filter((x) => x !== c && x.found).flatMap((x) => x.spans);
+      const m = ANCHORS[f.key].m;
+      const rival = findMismatch(prep, f, c.value, others, ranges);
+      if (rival && norm(rival.heard) !== norm(c.value) && !isAnotherFieldsValue(c.key, m, rival.heard)) {
+        c.dispute = rival;
+      }
+      if (!c.dispute && ranges) {
+        const turned = findTurnDispute(prep, ranges, f, c);
+        if (turned) c.dispute = turned;
+      }
+    }
+  }
+
+  // Confidence as two buckets, never a raw number: a verifier cannot act on 0.61,
+  // and showing one would erode trust in the ticks.
+  for (const c of checks) {
+    if (c.status === "mismatch" || c.dispute) {
+      const score = c.dispute ? c.dispute.score : c.score;
+      c.confidence = score == null || score >= 0.75 ? "high" : "low";
     }
   }
 
   const graded = checks.filter((c) => c.gate !== "soft");
-  const missing = graded.filter((c) => c.gate === "hard" && (c.status === "missing" || c.status === "elsewhere")).map((c) => c.key);
+  // "echo" joins missing: our agent saying a number is not the payer stating it.
+  const missing = graded.filter((c) => c.gate === "hard" &&
+    (c.status === "missing" || c.status === "elsewhere" || c.status === "echo")).map((c) => c.key);
   const mismatched = graded.filter((c) => c.status === "mismatch").map((c) => c.key);
-  const counted = graded.filter((c) => c.status !== "quiet");
+  const contested = checks.filter((c) => c.dispute).map((c) => c.key);
+  const bypassed = checks.filter((c) => c.status === "bypassed").map((c) => c.key);
+  const carrier = checks.filter((c) => c.status === "carrier").map((c) => c.key);
+  const echoed = checks.filter((c) => c.status === "echo").map((c) => c.key);
+  // Bypassed and carrier-sourced fields are out of the denominator: neither was
+  // ever going to be confirmed by this call, so counting them would make every
+  // record look partly unverified.
+  const counted = graded.filter((c) => c.status !== "quiet" && c.status !== "bypassed" && c.status !== "carrier");
   const matched = counted.filter((c) => c.status === "found").length;
 
-  if (!t) return { checks, matched: 0, total: counted.length, missing: [], mismatched: [], unconfirmed: 0, verdict: "NO AUDIO" };
+  if (!t) {
+    return {
+      checks, matched: 0, total: counted.length, missing: [], mismatched: [],
+      contested: [], bypassed, carrier, echoed: [], unconfirmed: 0, verdict: "NO TRANSCRIPT",
+    };
+  }
   return {
-    checks, matched, total: counted.length, missing, mismatched,
+    checks, matched, total: counted.length, missing, mismatched, contested, bypassed, carrier, echoed,
     unconfirmed: missing.length + mismatched.length,
     verdict: (missing.length || mismatched.length) ? "REJECTED" : counted.length ? "APPROVED" : "UNVERIFIED",
   };
@@ -1192,6 +1510,9 @@ export function spansFromChecks(checks) {
   for (const c of checks) {
     if (c.status === "found") for (const s of c.spans) all.push({ ...s, label: c.label, kind: "ok" });
     if (c.status === "mismatch") for (const s of c.heardSpans || []) all.push({ ...s, label: c.label, kind: "bad", value: c.value, heard: c.heard });
+    // The rival value in a self-contradiction is painted too, so "thirty percent"
+    // is visible in the transcript next to the confirmed "twenty percent".
+    if (c.dispute) for (const s of c.dispute.heardSpans || []) all.push({ ...s, label: c.label, kind: "bad", value: c.value, heard: c.dispute.heard });
   }
   all.sort((a, b) => a.start - b.start || (a.kind === "bad" ? -1 : 1));
   const out = [];

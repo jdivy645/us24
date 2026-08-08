@@ -1,5 +1,5 @@
 // Field registry shared by the form, preview, PDF, storage and Excel export.
-export const F = ["lastName", "firstName", "dob", "today", "insName", "insPhone", "policyId", "groupId", "planType", "serviceType", "network", "coverage", "effDate", "termDate", "payerId", "hra", "copay", "copayAmt", "covPct", "coins", "coinsAmt", "dedApply", "dedInd", "dedMet", "dedRem", "oop", "oopMet", "oopRem", "visitLimit", "visitUsed", "authEval", "authTx", "referral", "pcpRef", "authHow", "authWindow", "authNum", "authDates", "tfl", "tflCorr", "claimAddr", "repName", "callRef", "verifiedBy", "primary", "hasSec", "secName", "secPlan", "secPolicy", "secEff", "secDed", "secVisit", "secUsed", "note"];
+export const F = ["lastName", "firstName", "dob", "today", "insName", "insPhone", "policyId", "groupId", "planType", "serviceType", "network", "networkInd", "coverage", "effDate", "termDate", "payerId", "hra", "copay", "copayAmt", "covPct", "coins", "coinsAmt", "dedApply", "dedInd", "dedMet", "dedRem", "oop", "oopMet", "oopRem", "visitLimit", "visitUsed", "authEval", "authTx", "authAfter", "referral", "pcpRef", "authHow", "authWindow", "authNum", "authDates", "tfl", "tflCorr", "claimAddr", "repName", "callRef", "verifiedBy", "primary", "hasSec", "secName", "secPlan", "secPolicy", "secEff", "secDed", "secVisit", "secUsed", "note"];
 
 export const todayISO = () => new Date().toISOString().slice(0, 10);
 
@@ -19,18 +19,18 @@ const blank = () => Object.fromEntries(F.map((k) => [k, ""]));
 // Answer-bearing selects start blank on purpose: a pre-picked default would count
 // as "answered" for completeness and would be verified against the call even
 // though nobody chose it. Only non-answer fields keep a default.
+//
+// termDate used to default to "CURRENT", which was a verify.js SKIP token — so
+// the field arrived pre-filled AND silently exempt from both checks. It now starts
+// blank; effRange() still prints "TO CURRENT" for a blank or negative value.
 export const initialForm = () => ({
   ...blank(),
   today: todayISO(),
-  termDate: "CURRENT",
   serviceType: "PT",
 });
 
-// "Clear form" in the original blanks every field (selects included), then
-// restores only termDate and today.
 export const clearedForm = () => ({
   ...blank(),
-  termDate: "CURRENT",
   today: todayISO(),
 });
 
@@ -53,4 +53,4 @@ export const sampleForm = () =>
 export const collect = (form) =>
   Object.fromEntries(F.map((k) => [k, (form[k] || "").trim()]));
 
-export const HEAD = { _savedAt: "Saved At", lastName: "Last Name", firstName: "First Name", dob: "DOB", today: "Verification Date", insName: "Insurance", insPhone: "Payer Phone", policyId: "Policy ID", groupId: "Group ID", planType: "Plan Type", serviceType: "Service Type", network: "Network Status", coverage: "Coverage", effDate: "Effective Date", termDate: "Termination Date", payerId: "Payer ID", hra: "HCA/HRA", copay: "Co-pay", copayAmt: "Co-pay Amount", covPct: "Coverage %", coins: "Co-insurance", coinsAmt: "Co-insurance %", dedApply: "Deductible Applies", dedInd: "Deductible Individual", dedMet: "Deductible Met", dedRem: "Deductible Remaining", oop: "Out of Pocket", oopMet: "OOP Met", oopRem: "OOP Remaining", visitLimit: "Visit Limitation", visitUsed: "Visits Used", authEval: "Auth Initial Eval", authTx: "Auth Treatment", referral: "Referral Required", pcpRef: "PCP Referral", authHow: "How To Obtain Auth", authWindow: "Auth Window From DOS", authNum: "Authorization #", authDates: "Auth Coverage Dates", tfl: "TFL Claims", tflCorr: "TFL Corrected", claimAddr: "Claim Mailing Address", repName: "Insurance Rep", callRef: "Call Reference", verifiedBy: "Verified By", primary: "Primary Payer", hasSec: "Secondary On File", secName: "Secondary Insurance", secPlan: "Secondary Plan", secPolicy: "Secondary Policy ID", secEff: "Secondary Effective Date", secDed: "Secondary Deductible", secVisit: "Secondary Visit Limit", secUsed: "Secondary Used Limit", note: "Additional Info", _file: "PDF File", _verdict: "Verdict", _matched: "Matched", _total: "Checked", _missing: "Missing Fields", _mismatch: "Contradicted Fields", _blankCount: "Blank Required", _required: "Required Count", _blank: "Blank Required Fields", _transcript: "Transcript", _audioFile: "Audio File", _source: "Evidence Source" };
+export const HEAD = { _savedAt: "Saved At", lastName: "Last Name", firstName: "First Name", dob: "DOB", today: "Verification Date", insName: "Insurance", insPhone: "Payer Phone", policyId: "Policy ID", groupId: "Group ID", planType: "Plan Type", serviceType: "Service Type", network: "Network Status (Group)", networkInd: "Network Status (Ind Prov)", coverage: "Coverage", effDate: "Effective Date", termDate: "Termination Date", payerId: "Payer ID", hra: "HCA/HRA", copay: "Co-pay", copayAmt: "Co-pay Amount", covPct: "Coverage %", coins: "Co-insurance", coinsAmt: "Co-insurance %", dedApply: "Deductible Applies", dedInd: "Deductible Individual", dedMet: "Deductible Met", dedRem: "Deductible Remaining", oop: "Out of Pocket", oopMet: "OOP Met", oopRem: "OOP Remaining", visitLimit: "Visit Limitation", visitUsed: "Visits Used", authEval: "Auth Initial Eval", authTx: "Auth Treatment", authAfter: "Auth After Visit #", referral: "Referral Required", pcpRef: "PCP Referral", authHow: "How To Obtain Auth", authWindow: "Auth Window From DOS", authNum: "Authorization #", authDates: "Auth Coverage Dates", tfl: "TFL Claims", tflCorr: "TFL Corrected", claimAddr: "Claim Mailing Address", repName: "Insurance Rep", callRef: "Call Reference", verifiedBy: "Verified By", primary: "Primary Payer", hasSec: "Secondary On File", secName: "Secondary Insurance", secPlan: "Secondary Plan", secPolicy: "Secondary Policy ID", secEff: "Secondary Effective Date", secDed: "Secondary Deductible", secVisit: "Secondary Visit Limit", secUsed: "Secondary Used Limit", note: "Additional Info", _file: "PDF File", _verdict: "Verdict", _matched: "Matched", _total: "Checked", _missing: "Missing Fields", _mismatch: "Contradicted Fields", _blankCount: "Blank Required", _required: "Required Count", _blank: "Blank Required Fields", _transcript: "Transcript", _audioFile: "Audio File", _source: "Evidence Source", _contested: "Rep Contradicted Self", _echoed: "Said By Us, Not Confirmed", _bypassed: "Bypassed Fields", _bypassReasons: "Bypass Reasons", _carrier: "Carrier-Sourced Fields" };
