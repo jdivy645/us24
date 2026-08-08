@@ -83,6 +83,69 @@ export const NEVER_PREFILL = ["today", "termDate", "repName", "callRef", "authNu
 // summary. They are still stored on every version.
 export const PER_CALL_FIELDS = ["today", "repName", "callRef", "authNum", "note", "verifiedBy"];
 
+// ---------------------------------------------------------------------------
+// Where each field's value comes from.
+//
+// This is the colour coding on the client's own blank template, made executable.
+// It is the spine the rest of the app hangs off: it decides what gets filled from
+// our records, what the operator must get from the rep, what is never checked
+// against the call at all, and which handful of fields are checked hardest.
+//
+//   onFile     red text on the template. We already hold it — the patient file or
+//              the carrier master. Filled automatically and never chased as "the
+//              rep didn't say it". Still fails the record if the call CONTRADICTS
+//              it: a carrier record saying 90-day filing against a rep saying 180
+//              is the single most valuable thing this app finds.
+//
+//   internal   yellow highlight. The employee's own judgement or our own clock.
+//              Never verified against the call — there is nothing in the call to
+//              verify it against.
+//
+//   ask        green highlight. The reason the call is being made. Extracted from
+//              the transcript where possible, required, verified normally.
+//
+//   askStrict  green highlight with red text. The money and the authorization
+//              rules. Same as `ask`, but a wrong value here costs the practice
+//              money or has them treating without cover, so these get the higher
+//              auto-fill bar, the qualifier guard, the arithmetic identities, and
+//              individual sign-off rather than a bulk accept.
+//
+//   unclassed  uncoloured on the template. Captured when available, required of
+//              nobody.
+// ---------------------------------------------------------------------------
+
+const CLASSES = {
+  // insName sits here rather than in `ask` for the same reason as the patient's
+  // name: it is how we knew which number to dial. Nobody asks the rep who they
+  // work for. It is still hard-required at save, alongside the patient name.
+  onFile: ["lastName", "firstName", "dob", "insName", "insPhone", "claimAddr", "payerId", "tfl", "tflCorr"],
+  internal: ["today", "note"],
+  ask: [
+    "policyId", "groupId", "serviceType", "planType", "network", "networkInd", "coverage",
+    "effDate", "termDate", "copayAmt", "visitLimit", "visitUsed", "authWindow", "repName", "callRef",
+  ],
+  askStrict: [
+    "dedApply", "dedInd", "dedMet", "dedRem",
+    "coins", "coinsAmt", "covPct",
+    "oop", "oopMet", "oopRem",
+    "authEval", "authTx", "referral", "pcpRef",
+  ],
+};
+
+export const FIELD_CLASS = Object.fromEntries(
+  Object.entries(CLASSES).flatMap(([cls, keys]) => keys.map((k) => [k, cls])));
+
+export const classOf = (key) => FIELD_CLASS[key] || "unclassed";
+export const isOnFile = (key) => classOf(key) === "onFile";
+export const isInternal = (key) => classOf(key) === "internal";
+export const isStrict = (key) => classOf(key) === "askStrict";
+export const isAsked = (key) => { const c = classOf(key); return c === "ask" || c === "askStrict"; };
+export const keysOfClass = (cls) => CLASSES[cls] ? [...CLASSES[cls]] : [];
+
+// Everything the rep is expected to provide. `completeness.js` derives its
+// required list from this, so "Still to ask" means literally that.
+export const ASKED_FIELDS = [...CLASSES.ask, ...CLASSES.askStrict];
+
 export const tierOf = (key) => {
   for (const [tier, keys] of Object.entries(PREFILL_TIER)) if (keys.includes(key)) return tier;
   if (REFERENCE_FIELDS.includes(key)) return "reference";

@@ -44,8 +44,17 @@ export const ackOf = (meta, key) => (meta && meta[key] && meta[key].ack) || null
 
 // Values the operator did not obtain from the call. Never counted as "not heard",
 // but — critically — still able to be contradicted by it.
+//
+// "call" is deliberately NOT in this set. A machine-read value that the matcher
+// then cannot re-find is a red flag, not something to excuse.
 const NOT_FROM_CALL = new Set(["carrier", "portal", "derived", "prior", "import"]);
 export const isCarrier = (meta, key) => NOT_FROM_CALL.has(sourceOf(meta, key));
+
+// Read from the call by extract.js rather than typed by a person.
+export const extractOf = (meta, key) => (meta && meta[key] && meta[key].extract) || null;
+export const isMachineRead = (meta, key) => !!extractOf(meta, key);
+export const isAttested = (meta, key) => !!(extractOf(meta, key) || {}).review;
+export const reviewOf = (meta, key) => (extractOf(meta, key) || {}).review || null;
 
 export const bypassedKeys = (meta) => Object.keys(meta || {}).filter((k) => isBypassed(meta, k));
 export const carrierKeys = (meta) => Object.keys(meta || {}).filter((k) => isCarrier(meta, k));

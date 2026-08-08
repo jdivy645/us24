@@ -14,29 +14,53 @@ const jumpTo = (key) => {
   setTimeout(() => el.classList.remove("flash"), 1200);
 };
 
-function Row({ s, onUse, onKeep, onBypass, onClose }) {
+const clamp = (s, n = 90) => {
+  const t = String(s || "").replace(/\s+/g, " ").trim();
+  return t.length > n ? t.slice(0, n) + "…" : t;
+};
+
+function Row({ s, onUse, onKeep, onBypass, onAccept, onReject, onUseSuggestion, onClose }) {
   const heard = s.heard != null ? String(s.heard).replace(/\s+/g, " ").trim() : "";
+  const machine = s.kind === "autofill";
   return (
     <div className={"rg-row" + (s.blocking ? " blocking" : "")}>
       <div className="rg-main">
         <span className="rg-label">{s.label}</span>
-        {s.kind === "required" ? (
-          <span className="rg-detail">required, still empty</span>
+        {machine ? (
+          <span className="rg-detail"><b>{s.value}</b> · rep said “{clamp(s.quote)}”</span>
+        ) : s.kind === "required" ? (
+          <span className="rg-detail">required, still empty{s.suggestion ? ` · call may say “${s.suggestion.value}”` : ""}</span>
+        ) : s.kind === "filedisagree" ? (
+          <span className="rg-detail">on file <b>{s.onFile}</b> · call says <b>{clamp(heard, 40)}</b></span>
         ) : heard ? (
           <span className="rg-detail">
             form <b>{s.value || "—"}</b> · call {s.confidence === "low" ? "may say" : "says"} <b>{heard}</b>
           </span>
+        ) : s.suggestion ? (
+          <span className="rg-detail">call may say <b>{s.suggestion.value}</b> · {s.suggestion.why}</span>
         ) : (
           <span className="rg-detail">{s.value || "—"}{s.detail ? ` · ${s.detail}` : ""}</span>
         )}
         {s.acked && <span className="pill ok rg-pill">kept</span>}
+        {s.strict && machine && <span className="pill warn rg-pill">check individually</span>}
       </div>
       <div className="rg-acts">
-        {heard && !s.acked && (
+        {machine && (
           <>
-            <button className="btn btn-dark btn-sm" onClick={() => onUse(s.key, heard)}>Use “{heard}”</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => onKeep(s.key, heard, s.value)}>Keep mine</button>
+            <button className="btn btn-dark btn-sm" onClick={() => onAccept([s.key])}>Accept</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => onReject(s.key)}>Clear</button>
           </>
+        )}
+        {!machine && heard && !s.acked && (
+          <>
+            <button className="btn btn-dark btn-sm" onClick={() => onUse(s.key, heard)}>Use “{clamp(heard, 28)}”</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => onKeep(s.key, heard, s.value || s.onFile)}>
+              {s.kind === "filedisagree" ? "Keep the file value" : "Keep mine"}
+            </button>
+          </>
+        )}
+        {!machine && !heard && s.suggestion && (
+          <button className="btn btn-dark btn-sm" onClick={() => onUseSuggestion(s.suggestion)}>Use it</button>
         )}
         {(s.kind === "required" || s.kind === "notheard" || s.kind === "echo") && (
           <select className="rg-sel" value="" onChange={(e) => e.target.value && onBypass(s.key, e.target.value)}>
@@ -50,10 +74,11 @@ function Row({ s, onUse, onKeep, onBypass, onClose }) {
   );
 }
 
-export default function ReviewGate({ states, onUse, onKeep, onBypass, onClose, onSaveAnyway }) {
+export default function ReviewGate({ states, onUse, onKeep, onBypass, onAccept, onReject, onUseSuggestion, onClose, onSaveAnyway }) {
   const groups = reviewGroups(states);
   const blockers = blockingCount(states);
   const exceptions = [...states.values()].filter((s) => s.acked || s.kind === "bypassed").length;
+  const attested = [...states.values()].filter((s) => s.kind === "attested").length;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -72,16 +97,31 @@ export default function ReviewGate({ states, onUse, onKeep, onBypass, onClose, o
               <div className="rg-head">
                 {g.title} <span className="count">{g.items.length}</span>
                 <span className="rg-hint">{g.hint}</span>
+                {/* Only the non-strict ones. A wrong money or authorization value
+                    costs a denial or treatment without cover, so those are signed
+                    for one at a time. */}
+                {g.id === "autofill" && g.items.some((s) => !s.strict) && (
+                  <button className="btn btn-dark btn-xs"
+                    onClick={() => onAccept(g.items.filter((s) => !s.strict).map((s) => s.key))}>
+                    Accept {g.items.filter((s) => !s.strict).length}
+                  </button>
+                )}
               </div>
               {g.items.map((s) => (
-                <Row key={s.key} s={s} onUse={onUse} onKeep={onKeep} onBypass={onBypass} onClose={onClose} />
+                <Row key={s.key} s={s} onUse={onUse} onKeep={onKeep} onBypass={onBypass}
+                  onAccept={onAccept} onReject={onReject} onUseSuggestion={onUseSuggestion} onClose={onClose} />
               ))}
             </div>
           ))}
         </div>
         <div className="actionbar">
+          {/* The label is the record's summary — the operator should be able to
+              read what they are signing. */}
           <button className="btn btn-primary" disabled={blockers > 0} onClick={onSaveAnyway}>
-            {exceptions ? `Save with ${exceptions} exception${exceptions > 1 ? "s" : ""}` : "Save & generate PDF"}
+            {[attested ? `${attested} accepted` : "", exceptions ? `${exceptions} exception${exceptions > 1 ? "s" : ""}` : ""]
+              .filter(Boolean).length
+              ? `Save — ${[attested ? `${attested} accepted` : "", exceptions ? `${exceptions} exception${exceptions > 1 ? "s" : ""}` : ""].filter(Boolean).join(", ")}`
+              : "Save & generate PDF"}
           </button>
           <div className="spacer"></div>
           <button className="btn btn-ghost" onClick={onClose}>Keep editing</button>

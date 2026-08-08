@@ -7,7 +7,32 @@
 // both complete and unverified with nothing recorded. Both now consult
 // isBypassed(), and normalizeMeta() promotes a typed "NA" to a real bypass at save
 // — so the field still counts as answered, but the reason is on the record.
-import { isBypassed } from "./bypass.js";
+import { isBypassed, isNegative } from "./bypass.js";
+import { ASKED_FIELDS, classOf } from "./schema.js";
+import { HEAD } from "../data/fields.js";
+
+const up = (s) => String(s || "").trim().toUpperCase();
+const applies = (v, key) => !!String(v[key] || "").trim() && !isNegative(v[key]);
+const hasDeductible = (v) => up(v.dedApply) !== "NO" && applies(v, "dedInd");
+const hasOop = (v) => applies(v, "oop");
+
+// Some asked fields only become questions once another answer makes them one.
+// Chasing a deductible-met figure on a plan with no deductible is how a checklist
+// teaches people to ignore it.
+const REQUIRED_WHEN = {
+  copayAmt: (v) => up(v.copay) === "YES",
+  coinsAmt: (v) => up(v.coins) === "YES",
+  covPct: (v) => up(v.coins) === "YES",
+  dedMet: hasDeductible,
+  dedRem: hasDeductible,
+  oopMet: hasOop,
+  oopRem: hasOop,
+  authWindow: (v) => up(v.authEval) === "YES" || up(v.authTx) === "YES",
+  // Offered on the blank template, unused on the client's own filled one — most
+  // payers quote one network status. Captured and verified when present; never
+  // chased.
+  networkInd: () => false,
+};
 
 // "NA" is an ANSWER (the rep said there is no deductible), not a blank. Only these
 // count as unanswered.
@@ -16,34 +41,18 @@ const isAnswered = (val) => !UNANSWERED.has(String(val || "").trim().toUpperCase
 
 const sec = (v) => v.hasSec === "YES";
 
-// Labels read like the form's own <label>s — the manager is hunting for an input.
+// Derived from the field classification rather than hand-listed, so "Still to ask"
+// means exactly what the client's template says it means: the green fields, which
+// are the ones the rep has to provide.
+//
+// Deliberately NOT here: the red `onFile` fields (patient name, DOB, payer ID,
+// filing limits, claim address, payer phone). We already hold those, they are
+// filled from our own records, and listing them as things to chase the rep for is
+// how an operator ends up asking for something that was never theirs to give.
 export const MANDATORY_FIELDS = [
-  { key: "lastName", label: "Last name" },
-  { key: "firstName", label: "First name" },
-  { key: "dob", label: "Date of birth" },
-  { key: "insName", label: "Insurance name" },
-  { key: "policyId", label: "Policy ID" },
-  { key: "planType", label: "Plan type" },
-  { key: "network", label: "Network status" },
-  { key: "coverage", label: "Coverage" },
-  { key: "effDate", label: "Effective date" },
-  { key: "payerId", label: "Payer ID" },
-  { key: "copay", label: "Co-pay" },
-  { key: "copayAmt", label: "Co-pay amount" },
-  { key: "coins", label: "Co-insurance" },
-  { key: "coinsAmt", label: "Co-insurance %" },
-  { key: "dedApply", label: "Deductible applies" },
-  { key: "dedInd", label: "Deductible (individual)" },
-  { key: "oop", label: "Out of pocket max" },
-  { key: "visitLimit", label: "Visit limitation" },
-  { key: "authEval", label: "Auth required — initial eval" },
-  { key: "authTx", label: "Auth required — treatment" },
-  { key: "referral", label: "Referral required" },
-  { key: "tfl", label: "Timely filing — claims" },
-  { key: "repName", label: "Insurance rep name" },
-  { key: "callRef", label: "Call reference #" },
-  { key: "secName", label: "Secondary insurance name", when: sec },
-  { key: "secPolicy", label: "Secondary policy ID", when: sec },
+  ...ASKED_FIELDS.map((key) => ({ key, label: HEAD[key] || key, cls: classOf(key), when: REQUIRED_WHEN[key] })),
+  { key: "secName", label: "Secondary insurance name", cls: "unclassed", when: sec },
+  { key: "secPolicy", label: "Secondary policy ID", cls: "unclassed", when: sec },
 ];
 
 export function checkCompleteness(v, meta) {

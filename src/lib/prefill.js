@@ -92,12 +92,18 @@ export function clearPrefilled(currentForm, currentMeta) {
 // Only values the operator typed themselves AND the rep confirmed. Learning from a
 // prefilled value would let a wrong carrier record re-confirm itself forever.
 export function carrierLearnings(v, meta, result) {
-  const found = new Set((result?.checks || []).filter((c) => c.status === "found").map((c) => c.key));
+  // "found" is a typed value the rep independently confirmed; "attested" is one the
+  // machine read and a human then signed for. An unreviewed autofill is neither,
+  // and must never teach the carrier record anything.
+  const confirmed = new Set((result?.checks || [])
+    .filter((c) => c.status === "found" || c.status === "attested")
+    .map((c) => c.key));
   const out = {};
   for (const key of CARRIER_FIELDS) {
     const source = meta?.[key]?.source || "manual";
-    if (source !== "manual") continue;
-    if (!found.has(key)) continue;
+    if (source !== "manual" && source !== "call") continue;
+    if (source === "call" && !meta?.[key]?.extract?.review) continue;
+    if (!confirmed.has(key)) continue;
     const value = val(v, key);
     if (value) out[key] = value;
   }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { F, HEAD, collect, dash, initialForm, clearedForm, sampleForm } from "./data/fields.js";
 import * as db from "./lib/db.js";
 import { applyPrefill, clearPrefilled } from "./lib/prefill.js";
+import { isOnFile } from "./lib/schema.js";
 import { makePDF } from "./lib/pdf.js";
 import { exportExcel } from "./lib/excel.js";
 import { vobName, downloadBlob, downloadText } from "./lib/files.js";
@@ -11,8 +12,11 @@ import { checkCompleteness, recordCompleteness } from "./lib/completeness.js";
 import { downloadTranscriptTxt } from "./lib/transcriptFile.js";
 import { parseTranscript } from "./lib/transcriptParse.js";
 import { deriveAdditionalInfo } from "./lib/vobTemplate.js";
-import { normalizeMeta, setBypass, clearBypass, setAck, bypassSummary, bypassedKeys, carrierKeys } from "./lib/bypass.js";
+import { normalizeMeta, setBypass, clearBypass, setAck, bypassSummary, bypassedKeys, carrierKeys, extractOf } from "./lib/bypass.js";
 import { fieldStates, blockingCount } from "./lib/fieldState.js";
+import { getPrep } from "./lib/verify.js";
+import { extractFromTranscript, agentOnlyObservations } from "./lib/extract.js";
+import { decide, applyExtraction, useSuggestion, acceptFields, rejectField, clearAutofilled, unreviewedKeys } from "./lib/autofill.js";
 import ReviewGate from "./components/ReviewGate.jsx";
 import PrefillBar from "./components/PrefillBar.jsx";
 import CaseHistory from "./components/CaseHistory.jsx";
@@ -42,6 +46,7 @@ export default function App() {
   const [roles, setRoles] = useState({});
   const [reviewing, setReviewing] = useState(false);
   const [prefill, setPrefill] = useState(null);
+  const [readCall, setReadCall] = useState(null);
   const [historyFor, setHistoryFor] = useState(null);
   const [decision, setDecision] = useState(null);
   const [importing, setImporting] = useState(null);
@@ -102,7 +107,18 @@ export default function App() {
     () => checkTranscript(collect(settled), transcript, meta, { ranges: parsed?.ranges }),
     [settled, transcript, meta, parsed]);
   const comp = useMemo(() => checkCompleteness(collect(settled), meta), [settled, meta]);
-  const states = useMemo(() => fieldStates(collect(settled), meta, liveResult, comp), [settled, meta, liveResult, comp]);
+
+  // Auto-fill is refused outright on a transcript with no identified rep.
+  // Verification degrades safely without speaker labels because the operator typed
+  // the values; extraction does not, because there is no independent human
+  // statement to fall back on — our own agent's read-backs would be promoted
+  // straight into the form.
+  const canRead = !!parsed && parsed.speakers.some((s) => s.role === "rep");
+
+  const states = useMemo(
+    () => fieldStates(collect(settled), meta, liveResult, comp,
+      { suggest: readCall?.suggest || {}, conflict: readCall?.conflict || {} }),
+    [settled, meta, liveResult, comp, readCall]);
 
   const validate = () => {
     const missing = ["lastName", "firstName", "insName"].filter((k) => !v[k]);
@@ -111,6 +127,85 @@ export default function App() {
       return false;
     }
     return true;
+  };
+
+  /* ------------------------------------------------- reading the call ---- */
+
+  // A dry run first: extraction executes and reports, but writes nothing. The
+  // operator sees what it found before any of it lands in the form.
+  const runExtraction = (currentForm, currentMeta) => {
+    if (!canRead) return null;
+    const prep = getPrep(transcript);
+    const x = extractFromTranscript(prep, { ranges: parsed.ranges });
+    const d = decide(x, prep, { form: currentForm, meta: currentMeta });
+
+    // Where our records and the call disagree, neither wins on its own. This is
+    // the finding the app exists for — carrier says 90-day filing, rep says 180.
+    const conflict = {};
+    for (const [k, p] of Object.entries({ ...d.fill, ...d.suggest })) {
+      const src = currentMeta[k]?.source;
+      const onFile = String(currentForm[k] || "").trim();
+      if (!onFile || !src || src === "manual" || src === "call") continue;
+      if (onFile.toUpperCase() === String(p.value).toUpperCase()) continue;
+      conflict[k] = { onFile, call: p.value, quote: p.quote };
+    }
+    return { ...d, conflict, agentOnly: agentOnlyObservations(prep, parsed.ranges), prep };
+  };
+
+  const handleReadCall = () => {
+    const d = runExtraction(v, meta);
+    if (!d) { toast("This transcript has no identified rep — label the speakers first", "bad"); return; }
+    setReadCall(d);
+    const n = d.counts.fill + d.counts.suggest;
+    toast(n ? `Read the call — ${d.counts.fill} to fill, ${d.counts.suggest} to consider` : "Nothing in this call could be read into the form", n ? "good" : "warn");
+  };
+
+  const handleApplyRead = () => {
+    if (!readCall) return;
+    const out = applyExtraction(form, meta, readCall, { transcript, ranges: parsed?.ranges, by: v.verifiedBy });
+    setForm(out.form);
+    setMeta(out.meta);
+    const tail = out.rejected.length ? ` · ${out.rejected.length} could not be re-verified and were left out` : "";
+    toast(`Filled ${out.filled.length} field(s) from the call — check them before saving${tail}`,
+      out.rejected.length ? "warn" : "good");
+  };
+
+  const handleAccept = (keys) => {
+    setMeta((m) => acceptFields(m, keys, v.verifiedBy));
+    toast(`Accepted ${keys.length} value(s) read from the call`);
+  };
+
+  const handleRejectRead = (k) => {
+    const out = rejectField(form, meta, k, v.verifiedBy);
+    setForm(out.form);
+    setMeta(out.meta);
+  };
+
+  const handleClearSection = (keys) => {
+    let f = form, m = meta;
+    for (const k of keys) { const o = rejectField(f, m, k, v.verifiedBy); f = o.form; m = o.meta; }
+    setForm(f); setMeta(m);
+    toast(`Cleared ${keys.length} machine-read value(s)`);
+  };
+
+  const handleClearAllRead = () => {
+    const out = clearAutofilled(form, meta);
+    setForm(out.form);
+    setMeta(out.meta);
+    toast("Cleared everything read from the call that you had not accepted");
+  };
+
+  const handleUseSuggestion = (p) => {
+    const out = useSuggestion(form, meta, p, v.verifiedBy);
+    setForm(out.form);
+    setMeta(out.meta);
+    toast(`${HEAD[p.key]} set from the call`);
+  };
+
+  const handleShowInCall = (s) => {
+    setUpload((u) => u);   // no state change; the transcript panel scrolls itself
+    const el = document.getElementById("call-transcript");
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
   };
 
   const handleBypass = (k, reason) => setMeta((m) => setBypass(m, k, reason, "", v.verifiedBy));
@@ -135,12 +230,19 @@ export default function App() {
     }
   };
 
+  // The red fields on the client's template: patient name, DOB, payer phone, payer
+  // ID, claim address, filing limits. We already hold these, so they are filled
+  // from our own records and never chased on the call — but the engine still grades
+  // them, so a rep who contradicts one is still heard.
   const handleApplyPrefill = () => {
     if (!prefill) return;
     const next = applyPrefill(form, meta, prefill);
     setForm(next.form);
     setMeta(next.meta);
-    toast(next.filled.length ? `Filled ${next.filled.length} field(s) from what is on file` : "Nothing left to fill");
+    const onFile = next.filled.filter(isOnFile).length;
+    toast(next.filled.length
+      ? `Filled ${next.filled.length} field(s) from our records${onFile ? ` — ${onFile} will not be chased on the call` : ""}`
+      : "Nothing left to fill");
   };
 
   const handleClearPrefilled = () => {
@@ -247,6 +349,17 @@ export default function App() {
         _bypassed: res.bypassed.map(labelOf),
         _bypassReasons: bypassSummary(savedMeta, Object.fromEntries(res.checks.map((c) => [c.key, c.label]))),
         _carrier: res.carrier.map(labelOf),
+        // Who typed what, six months from now.
+        _attested: res.attested.map(labelOf),
+        _typed: res.checks.filter((c) => c.status === "found").map((c) => c.label),
+        // The extractor's measured error rate, per record, in the client's own
+        // data — and the gate on ever turning auto-fill on by default.
+        _autofillEdited: F.filter((k) => {
+          const ex = extractOf(savedMeta, k);
+          return ex && String(v[k] || "") !== String(ex.value || "");
+        }).map((k) => `${HEAD[k]}: proposed "${extractOf(savedMeta, k).value}" → saved "${v[k] || "(cleared)"}"`),
+        _extractQuotes: F.filter((k) => extractOf(savedMeta, k))
+          .map((k) => `${HEAD[k]}: "${String(extractOf(savedMeta, k).quote || "").slice(0, 120)}"`),
         _blank: compAtSave.blank.map((f) => f.label), _blankCount: compAtSave.blank.length, _required: compAtSave.required,
         _transcript: text, _source: source, _meta: savedMeta,
       };
@@ -257,7 +370,11 @@ export default function App() {
           missing: recRow._missing, mismatch: recRow._mismatch,
           bypassed: recRow._bypassed, carrier: recRow._carrier,
           contested: recRow._contested, echoed: recRow._echoed,
-          bypassReasons: recRow._bypassReasons,
+          attested: res.attested, bypassReasons: recRow._bypassReasons,
+          // carrierLearnings() reads result.checks to find what the rep actually
+          // confirmed. Without this it saw an empty array and the carrier master
+          // learned nothing, ever.
+          checks: res.checks.map((c) => ({ key: c.key, status: c.status })),
         },
         completeness: { blank: recRow._blank, blankCount: recRow._blankCount, required: recRow._required },
       });
@@ -457,6 +574,12 @@ export default function App() {
               onDownloadText={handleDownloadText}
               onPickQueued={handlePickQueued}
               onSetRole={handleSetRole}
+              canRead={canRead}
+              readCall={readCall}
+              onReadCall={handleReadCall}
+              onApplyRead={handleApplyRead}
+              onClearRead={handleClearAllRead}
+              onUseSuggestion={handleUseSuggestion}
             />
             <PrefillBar
               prefill={prefill}
@@ -478,6 +601,11 @@ export default function App() {
               onBypass={handleBypass}
               onClearBypass={handleClearBypass}
               onGenerateNote={handleGenerateNote}
+              onAccept={handleAccept}
+              onReject={handleRejectRead}
+              onUseSuggestion={handleUseSuggestion}
+              onShowInCall={handleShowInCall}
+              onClearSection={handleClearSection}
               onSave={handleSave}
               onPreviewPDF={handlePreviewPDF}
               onClear={handleClear}
@@ -612,6 +740,9 @@ export default function App() {
           onUse={(k, heard) => set(k, heard)}
           onKeep={handleKeep}
           onBypass={handleBypass}
+          onAccept={handleAccept}
+          onReject={handleRejectRead}
+          onUseSuggestion={handleUseSuggestion}
           onClose={() => setReviewing(false)}
           onSaveAnyway={commit}
         />

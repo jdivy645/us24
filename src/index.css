@@ -201,6 +201,21 @@ label.btn.disabled{opacity:.5;cursor:not-allowed}
 .g-contested{color:#B25E12}
 .g-echo{color:#B25E12}
 .g-carrier,.g-bypassed{color:var(--ink-soft)}
+.g-autofill,.g-filedisagree{color:#2C6FB8}
+.g-attested{color:#3C8F72}
+/* Dashed is reserved for "a machine wrote this and nobody has checked it" —
+   nothing else in the form uses it, so unsettled fields read at a glance. */
+.f-autofill>input,.f-autofill>select{border-left:3px dashed #2C6FB8;background:#F5F9FE}
+.f-attested>input,.f-attested>select{border-left:3px solid #7FC3AA}
+.f-filedisagree>input,.f-filedisagree>select{border-left:3px solid #2C6FB8;background:#F5F9FE}
+.fs.auto{color:#2C6FB8}
+.fs-quote{font-style:italic}
+.sec-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sec-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto;text-transform:none;letter-spacing:0}
+.sec-count{font-size:9.5px;font-weight:800;color:#2C6FB8;background:#EAF2FB;border-radius:99px;padding:1px 7px}
+.sec-missing{font-size:9.5px;font-weight:800;color:#B25E12;background:var(--warn-bg);border-radius:99px;padding:1px 7px;text-transform:none;letter-spacing:0}
+.pull-row{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:3px 0;border-bottom:1px dotted #E9EDF3;font-size:11.5px}
+.pull-k{font-weight:700;min-width:150px}
 .f-conflict>input,.f-conflict>select,.f-required>input,.f-required>select,
 .f-contested>input,.f-contested>select{border-left:3px solid #C0392B}
 .f-contested>input,.f-contested>select{border-left-color:#E8761F}

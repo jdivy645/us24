@@ -8,7 +8,21 @@ const TRANSCRIPT_ACCEPT = ".txt,.text,.log,.vtt,.srt,text/plain,text/vtt";
 const ROLE_LABEL = { rep: "insurance rep", agent: "our side", ivr: "phone menu", unknown: "unidentified" };
 const FORMAT_LABEL = { ringcentral: "RingCentral export", vtt: "captions (VTT/SRT)", labelled: "speaker-labelled", plain: "plain text" };
 
-export default function CallMediaPanel({ upload, parsed, queue, onTranscriptFiles, onPaste, onClearTranscript, onDownloadText, onPickQueued, onSetRole }) {
+import { HEAD } from "../data/fields.js";
+
+const jumpTo = (key) => {
+  const el = document.getElementById("f-" + key);
+  if (!el) return;
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  el.focus({ preventScroll: true });
+  el.classList.add("flash");
+  setTimeout(() => el.classList.remove("flash"), 1200);
+};
+
+export default function CallMediaPanel({
+  upload, parsed, queue, onTranscriptFiles, onPaste, onClearTranscript, onDownloadText,
+  onPickQueued, onSetRole, canRead, readCall, onReadCall, onApplyRead, onClearRead, onUseSuggestion,
+}) {
   const boxRef = useRef(null);
   const [pasting, setPasting] = useState(false);
   const [draft, setDraft] = useState("");
@@ -121,10 +135,78 @@ export default function CallMediaPanel({ upload, parsed, queue, onTranscriptFile
               </div>
             )}
             {parsed.warnings.map((w) => <p key={w} className="hint warn-text">{w}</p>)}
+
+            {/* Auto-fill is opt-in per call, and refused outright without an
+                identified rep — otherwise our own agent's read-backs would be
+                promoted into the form. */}
+            <div className="ps-row" style={{ marginTop: 4 }}>
+              <span className="ps-k">Auto-fill</span>
+              {!canRead ? (
+                <span className="hint warn-text">
+                  Off for this transcript — there is no way to tell the rep's words from ours. Set a speaker to “insurance rep” above to turn it on.
+                </span>
+              ) : !readCall ? (
+                <>
+                  <button className="btn btn-dark btn-sm" onClick={onReadCall}>Read this call</button>
+                  <span className="hint">Nothing is written until you look at what it found.</span>
+                </>
+              ) : (
+                <>
+                  <span className="pf-chip">{readCall.counts.fill} to fill · {readCall.counts.suggest} to consider</span>
+                  {readCall.counts.fill > 0 && <button className="btn btn-dark btn-sm" onClick={onApplyRead}>Fill the blanks</button>}
+                  <button className="btn btn-ghost btn-sm" onClick={onReadCall}>Read again</button>
+                  <button className="btn btn-ghost btn-sm" onClick={onClearRead}>Clear what it wrote</button>
+                </>
+              )}
+            </div>
           </div>
         )}
 
-        <div className="rec-transcript" ref={boxRef} style={{ marginTop: 12, marginBottom: 0 }}>
+        {/* Everything the engine noticed, including where it filled nothing.
+            Absence of a fill is not absence of information, and an operator who
+            trusts a blank is the failure mode with no local signal. */}
+        {readCall && (
+          <div className="parse-sum" style={{ marginTop: 8 }}>
+            <div className="rg-head">
+              Pulled from this call <span className="count">{readCall.counts.fill + readCall.counts.suggest}</span>
+            </div>
+            {Object.values({ ...readCall.fill, ...readCall.suggest }).map((p) => (
+              <div key={p.key} className="pull-row">
+                <span className="pull-k">{HEAD[p.key] || p.key}</span>
+                <b>{p.value}</b>
+                <span className="hint">“{String(p.quote).slice(0, 70)}”</span>
+                <button className="btn btn-ghost btn-xs" onClick={() => jumpTo(p.key)}>→ field</button>
+              </div>
+            ))}
+
+            {(readCall.counts.contested + readCall.counts.blocked + Object.keys(readCall.agentOnly || {}).length) > 0 && (
+              <>
+                <div className="rg-head" style={{ marginTop: 10 }}>
+                  Heard but not placed
+                  <span className="count">{readCall.counts.contested + readCall.counts.blocked + Object.keys(readCall.agentOnly || {}).length}</span>
+                  <span className="rg-hint">Noticed, deliberately not written in.</span>
+                </div>
+                {Object.values({ ...readCall.contested, ...readCall.blocked }).map((p) => (
+                  <div key={p.key} className="pull-row">
+                    <span className="pull-k">{HEAD[p.key] || p.key}</span>
+                    <b>{p.value}</b>
+                    <span className="hint warn-text">{p.why}</span>
+                    <button className="btn btn-ghost btn-xs" onClick={() => onUseSuggestion(p)}>Use it</button>
+                  </div>
+                ))}
+                {Object.values(readCall.agentOnly || {}).map((p) => (
+                  <div key={p.key} className="pull-row">
+                    <span className="pull-k">{HEAD[p.key] || p.key}</span>
+                    <b>{p.value}</b>
+                    <span className="hint warn-text">only our side said this</span>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
+        <div id="call-transcript" className="rec-transcript" ref={boxRef} style={{ marginTop: 12, marginBottom: 0 }}>
           {shown || <span className="hint">The transcript appears here — upload a file, or paste the text.</span>}
         </div>
         {shown && (

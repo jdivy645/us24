@@ -29,8 +29,12 @@ export const ANCHORS = {
 
   dedInd: { m: "money", g: "ded", base: true, q: ["individual", "single", "member", "annual", "yearly", "calendar"],
     heads: [["deductible"], ["deductibles"]] },
+  // "What is the Met amount?" / "They showing zero dollars." is how the figure is
+  // actually asked for and given — the word "deductible" is in the question two
+  // turns earlier, not in the answer. The two-token phrase only: a bare ["met"]
+  // would open this topic on "the deductible has been met", which decides nothing.
   dedMet: { m: "money", g: "ded", q: ["met", "satisfied", "applied", "toward", "towards", "used"],
-    heads: [["deductible"], ["deductibles"]] },
+    heads: [["deductible"], ["deductibles"], ["met", "amount"]] },
   dedRem: { m: "money", g: "ded", q: ["remaining", "remains", "left", "balance", "outstanding", "unmet", "still"],
     heads: [["deductible"], ["deductibles"]] },
 

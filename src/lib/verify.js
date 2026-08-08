@@ -16,7 +16,7 @@
 // A found check may additionally carry `dispute`: the typed value WAS said, but a
 // rival value was stated about the same field too. See the contested pass below.
 import { ANCHORS, HEAD_IX, OWN_Q, SIB_Q, MTYPE, TOPIC_TOKENS, FAMILY, KEYWORDS, KEYWORD_WINDOW } from "./anchors.js";
-import { isBypassed, bypassOf, isCarrier } from "./bypass.js";
+import { isBypassed, bypassOf, isCarrier, isMachineRead, isAttested } from "./bypass.js";
 import { roleAt } from "./transcriptParse.js";
 
 // A verifier's most common move is to read a value back for confirmation:
@@ -1041,9 +1041,12 @@ function candidatesFor(prep, key, m, formNorm) {
     out.push({ ...n, norm: n.val * DUR[u], cue: true });
   }
   else if (m === "id" || m === "phone") for (const r of runs) {
-    const want = String(formNorm).length;
     if (r.digits.length < 4) continue;
-    if (m === "phone" ? r.digits.length !== 10 : Math.abs(r.digits.length - want) > 1) continue;
+    // A phone is ten digits by definition — that is a type rule, not a form value.
+    if (m === "phone") { if (r.digits.length !== 10) continue; }
+    // For an ID the typed value only ever served as a length hint. Blind
+    // extraction holds no value to hint with, and takes every run on offer.
+    else if (formNorm != null && Math.abs(r.digits.length - String(formNorm).length) > 1) continue;
     out.push({ ti: r.ti0, s: r.s, e: r.e, norm: r.digits, cue: true });
   }
   else if (m === "date") for (const d of dates) out.push({ ti: d.ti, s: d.s, e: d.e, norm: { y: d.y, m: d.m, d: d.d }, cue: true, noYear: !d.y });
@@ -1057,24 +1060,37 @@ const sameValue = (m, a, b) => {
 
 const fmtHeard = (prep, c) => prep.text.slice(c.s, c.e).trim();
 
-function findMismatch(prep, f, value, confirmed, ranges) {
+// The scoring loop, shared by contradiction hunting and by blind extraction.
+//
+// `value` is the typed form value, or null. Null is blind mode: every guard below
+// still applies — turn boundaries, qualifier arbitration, the nearest same-family
+// anchor, hedges, the bare-number rule, the exclusion list — but nothing is thrown
+// away for AGREEING with a value we do not hold. That single skipped `continue` is
+// the whole difference between "this contradicts the form" and "this is what the
+// form should say".
+//
+// findMismatch always passes a value, so `formNorm` is never null on the verify
+// path and every condition added for blind mode is a no-op there.
+function scoreCandidates(prep, f, value, exclude, ranges) {
   const spec = ANCHORS[f.key];
   const m = spec && spec.m;
-  if (!m || m === "none" || m === "yesno" || m === "enum2") return null;
-  if (prep.toks.length < MIN_TOKENS) return null;
-  const formNorm = normForm(m, value);
-  if (formNorm == null) return null;
+  const none = (reason) => ({ m, spec, scored: [], reason });
+  if (!m || m === "none" || m === "yesno" || m === "enum2") return none("not-measurable");
+  if (prep.toks.length < MIN_TOKENS) return none("transcript-too-short");
+  const formNorm = value == null ? null : normForm(m, value);
+  if (value != null && formNorm == null) return none("unparsable-value");
 
   const sites = anchorSites(prep, ranges).filter((s) => s.keys.has(f.key));
-  if (!sites.length) return null;
+  if (!sites.length) return none("topic-never-named");
   const usable = sites.filter((s) => s.j <= prep.toks.length - TAIL_GUARD).slice(0, MAX_HITS);
-  if (!usable.length) return null;
+  if (!usable.length) return none("topic-never-named");
 
   let cands = candidatesFor(prep, f.key, m, formNorm);
-  // Only the rep can contradict. Our own agent misreading a figure back ("you
-  // told me 18 days") must never be quoted as what the call said.
+  // Only the rep can contradict, and only the rep can supply a value. Our own
+  // agent misreading a figure back ("you told me 18 days") must never be quoted as
+  // what the call said, nor written into the form.
   if (ranges) cands = cands.filter((c) => roleAt(ranges, c.s) !== "agent");
-  if (!cands.length) return null;
+  if (!cands.length) return none("no-candidate");
   const own = OWN_Q.get(f.key) || new Set(), sib = SIB_Q.get(f.key) || new Set();
   const [fwd, back] = WIN[m] || [10, 4];
   // Within one speaker's turn the subject and its value belong together whatever
@@ -1110,7 +1126,8 @@ function findMismatch(prep, f, value, confirmed, ranges) {
       if (turnOf && !site.inherited && !sameTurn) continue;
       const limit = sameTurn ? SAME_TURN : (c.ti >= site.j ? fwd : back);
       if (dist > limit) continue;
-      if (sameValue(m, formNorm, c.norm)) continue; // agrees — not a mismatch
+      // Blind mode holds no value to agree with, so nothing is discarded here.
+      if (formNorm !== null && sameValue(m, formNorm, c.norm)) continue; // agrees — not a mismatch
 
       // qualifier arbitration inside the group
       const lo = Math.max(0, Math.min(site.i, c.ti) - 2), hi = Math.min(prep.toks.length, Math.max(site.j, c.ti) + 3);
@@ -1140,8 +1157,9 @@ function findMismatch(prep, f, value, confirmed, ranges) {
       }
       if (nearest && !nearest.keys.has(f.key)) continue;
 
-      // already highlighted green for a different field
-      if (confirmed.some((x) => c.s >= x.start && c.e <= x.end)) continue;
+      // already claimed — green for a different field on the verify path, or taken
+      // by an earlier extraction on the blind one
+      if (exclude.some((x) => c.s >= x.start && c.e <= x.end)) continue;
       // a hedged number is not a contradiction ("not sure, maybe five hundred")
       let hedged = false;
       for (let k = Math.min(site.j, c.ti); k < Math.max(site.i, c.ti); k++) if (HEDGE.has(prep.toks[k].t)) { hedged = true; break; }
@@ -1161,14 +1179,46 @@ function findMismatch(prep, f, value, confirmed, ranges) {
       scored.push({ ...c, score, site });
     }
   }
-  if (!scored.length) return null;
   scored.sort((a, b) => b.score - a.score);
+  return { m, spec, scored, reason: scored.length ? null : "no-candidate" };
+}
+
+function findMismatch(prep, f, value, confirmed, ranges) {
+  const { m, scored } = scoreCandidates(prep, f, value, confirmed, ranges);
+  if (!scored.length) return null;
   const best = scored[0];
   if (best.score < MISMATCH_MIN) return null;
   const rival = scored.find((x) => !sameValue(m, x.norm, best.norm));
   if (rival && best.score - rival.score < AMBIG_GAP) return null;
   return { heard: fmtHeard(prep, best), heardSpans: [{ start: best.s, end: best.e }], anchorText: best.site.text, score: best.score };
 }
+
+// The blind twin of findMismatch: what does the call say this field should be?
+//
+// Where findMismatch returns null on an ambiguity, this REPORTS it. "The rep said
+// either 20 or 30" is not actionable as an accusation, but it is very actionable
+// as a prompt — the operator picks.
+export function findBest(prep, f, { exclude = [], ranges = null } = {}) {
+  const { m, spec, scored, reason } = scoreCandidates(prep, f, null, exclude, ranges);
+  if (!scored.length) return { hit: null, reason: reason || "no-candidate" };
+  const best = scored[0];
+  if (best.score < MISMATCH_MIN) return { hit: null, reason: "too-weak" };
+  const rival = scored.find((x) => !sameValue(m, x.norm, best.norm)) || null;
+  return {
+    hit: {
+      m, spec, cand: best, score: best.score, rival,
+      ambiguous: !!rival && best.score - rival.score < AMBIG_GAP,
+      span: { start: best.s, end: best.e },
+      anchorText: best.site.text,
+      quote: fmtHeard(prep, best),
+    },
+    reason: null,
+  };
+}
+
+// Additive exports so extract.js can reuse the exact predicates that will grade
+// whatever it proposes.
+export { matchEnum, saidByRep, MISMATCH_MIN, AMBIG_GAP };
 
 /* ------------------------------------------------------------------ *
  * Public API
@@ -1476,6 +1526,25 @@ export function checkTranscript(v, transcript, meta, opts = {}) {
     }
   }
 
+  // Machine-read values are told apart from typed ones.
+  //
+  // A `found` check means two independent statements agree: the operator's
+  // transcription of what they heard, and this engine's search of the text. When
+  // the value was read out of the transcript in the first place, that agreement is
+  // circular — the form matches the call by construction. So it gets its own name.
+  //
+  //   attested  a named human compared it to the quote and accepted it
+  //   autofill  nobody has looked yet
+  //
+  // Only applied where the status would otherwise be `found`. A mismatch, echo or
+  // elsewhere keeps its own status: a machine-read value the rep later contradicted
+  // must still fail the record.
+  for (const c of checks) {
+    if (c.status !== "found" || !isMachineRead(meta, c.key)) continue;
+    c.status = isAttested(meta, c.key) ? "attested" : "autofill";
+    c.machineRead = true;
+  }
+
   const graded = checks.filter((c) => c.gate !== "soft");
   // "echo" joins missing: our agent saying a number is not the payer stating it.
   const missing = graded.filter((c) => c.gate === "hard" &&
@@ -1488,19 +1557,34 @@ export function checkTranscript(v, transcript, meta, opts = {}) {
   // Bypassed and carrier-sourced fields are out of the denominator: neither was
   // ever going to be confirmed by this call, so counting them would make every
   // record look partly unverified.
+  const attested = checks.filter((c) => c.status === "attested").map((c) => c.key);
+  const autofilled = checks.filter((c) => c.status === "autofill").map((c) => c.key);
   const counted = graded.filter((c) => c.status !== "quiet" && c.status !== "bypassed" && c.status !== "carrier");
+  // `matched` stays the count of values a human typed and the rep independently
+  // confirmed, so "ALL HEARD 34/34" keeps the meaning it had before any of this.
   const matched = counted.filter((c) => c.status === "found").length;
 
   if (!t) {
     return {
       checks, matched: 0, total: counted.length, missing: [], mismatched: [],
-      contested: [], bypassed, carrier, echoed: [], unconfirmed: 0, verdict: "NO TRANSCRIPT",
+      contested: [], bypassed, carrier, echoed: [], attested: [], autofilled: [],
+      unconfirmed: 0, verdict: "NO TRANSCRIPT",
     };
   }
+  // A new word rather than a widened APPROVED. This product's output is a
+  // defensible record; if someone pulls a row six months from now, APPROVED has to
+  // still mean what it meant before auto-fill shipped.
+  const verdict =
+    (missing.length || mismatched.length) ? "REJECTED"
+      : !counted.length ? "UNVERIFIED"
+        : attested.length || autofilled.length ? "ATTESTED"
+          : "APPROVED";
+
   return {
     checks, matched, total: counted.length, missing, mismatched, contested, bypassed, carrier, echoed,
+    attested, autofilled,
     unconfirmed: missing.length + mismatched.length,
-    verdict: (missing.length || mismatched.length) ? "REJECTED" : counted.length ? "APPROVED" : "UNVERIFIED",
+    verdict,
   };
 }
 

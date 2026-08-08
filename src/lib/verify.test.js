@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert";
 import { checkTranscript } from "./verify.js";
-import { checkCompleteness } from "./completeness.js";
+import { checkCompleteness, MANDATORY_FIELDS } from "./completeness.js";
 import { buildTranscriptTxt } from "./transcriptFile.js";
 import { sampleForm, initialForm } from "../data/fields.js";
 
@@ -11,9 +11,10 @@ const SAMPLE = {
   planType: "HMO AETNA MEDICARE DUAL CARE", network: "IN NETWORK", coverage: "INN BENEFITS WITH AUTH",
   effDate: "2026-03-01", termDate: "CURRENT", payerId: "60054", hra: "NA", copay: "NO", copayAmt: "$0.00",
   covPct: "100%", coins: "NO", coinsAmt: "0%", dedApply: "NO", dedInd: "NA", oop: "NA",
-  visitLimit: "MN (medically necessary)", authEval: "YES", authTx: "YES", referral: "NO", pcpRef: "NO",
-  authHow: "Through Holista portal", tfl: "120 DAYS FROM DOS", tflCorr: "180 DAYS FROM DOS",
-  repName: "CLARK Y", callRef: "358428114", hasSec: "NO",
+  visitLimit: "MN (medically necessary)", visitUsed: "3", authEval: "YES", authTx: "YES", referral: "NO", pcpRef: "NO",
+  authHow: "Through Holista portal", authWindow: "14 DAYS",
+  tfl: "120 DAYS FROM DOS", tflCorr: "180 DAYS FROM DOS",
+  repName: "CLARK Y", callRef: "358428114", hasSec: "NO", serviceType: "PT",
 };
 
 const FULL_CALL = `Thank you for calling Aetna, my name is Clark. Can I get the member ID?
@@ -22,8 +23,9 @@ Date of birth December thirty first nineteen fifty seven, last name Yusuff, firs
 Group number is zero zero zero zero zero three T X and the payer ID is six zero zero five four.
 The plan is an HMO Aetna Medicare Dual Care plan, effective March first twenty twenty six.
 Benefits are in network benefits with authorization. There is no copay and no coinsurance, covered at one hundred percent.
-Visits are limited to medically necessary. Authorization is required for the initial evaluation and for treatment,
-you obtain it through the Holista portal. No referral is required.
+Visits are limited to medically necessary and they have used three visits so far.
+Authorization is required for the initial evaluation and for treatment, and you must submit the auth
+request within fourteen days. You obtain it through the Holista portal. No referral is required.
 Timely filing is one hundred twenty days from date of service, corrected claims one hundred eighty days from date of service.
 There is no secondary on file. Your reference number is three five eight four two eight one one four.`;
 
@@ -269,9 +271,48 @@ test("the shipped sample record is a complete form", () => {
 });
 
 test("a fresh form flags every required field, with no pre-picked answers", () => {
-  const c = checkCompleteness(initialForm());
-  assert.strictEqual(c.blank.length, c.required);
-  assert.ok(c.required >= 24, `expected the full required set, got ${c.required}`);
+  const fresh = initialForm();
+  const c = checkCompleteness(fresh);
+  assert.ok(c.required >= 18, `expected the full required set, got ${c.required}`);
+  // Everything required is blank except the service type, which is the practice's
+  // own context rather than one of the rep's answers — they tell the rep which
+  // discipline they are calling about, not the other way round.
+  assert.deepStrictEqual(
+    c.blank.length === c.required ? [] : MANDATORY_FIELDS.filter((f) => fresh[f.key]).map((f) => f.key),
+    ["serviceType"]);
+  // No answer-bearing select is pre-picked: a default would count as answered and
+  // would then be verified against a call nobody had yet made.
+  for (const k of ["copay", "coins", "dedApply", "authEval", "authTx", "referral", "pcpRef", "hasSec", "network", "networkInd", "termDate"]) {
+    assert.strictEqual(fresh[k], "", `${k} must start blank`);
+  }
+});
+
+test("a field is only required once another answer makes it a question", () => {
+  // Chasing a deductible-met figure on a plan with no deductible is how a
+  // checklist teaches people to ignore it.
+  const noDed = checkCompleteness({ ...SAMPLE, dedApply: "NO", dedInd: "NA" });
+  assert.ok(!noDed.blank.some((f) => f.key === "dedMet" || f.key === "dedRem"));
+
+  const hasDed = checkCompleteness({ ...SAMPLE, dedApply: "YES", dedInd: "$3000.00", dedMet: "", dedRem: "" });
+  assert.deepStrictEqual(hasDed.blank.map((f) => f.key).sort(), ["dedMet", "dedRem"]);
+
+  const noCoins = checkCompleteness({ ...SAMPLE, coins: "NO", coinsAmt: "", covPct: "" });
+  assert.ok(!noCoins.blank.some((f) => f.key === "coinsAmt" || f.key === "covPct"));
+});
+
+test("the red 'already on file' fields are never chased on the call", () => {
+  // Patient name, DOB, payer ID, filing limits and the claim address come from our
+  // own records. Listing them as things to ask the rep for is how an operator ends
+  // up asking for something that was never theirs to give.
+  const c = checkCompleteness({});
+  const asked = new Set(c.blank.map((f) => f.key));
+  for (const k of ["lastName", "firstName", "dob", "insName", "insPhone", "payerId", "tfl", "tflCorr", "claimAddr"]) {
+    assert.ok(!asked.has(k), `${k} is on file — it must not appear in "still to ask"`);
+  }
+  // …and the green ones are.
+  for (const k of ["policyId", "groupId", "coverage", "effDate", "visitLimit", "repName", "callRef"]) {
+    assert.ok(asked.has(k), `${k} must be asked on the call`);
+  }
 });
 
 test("the .txt report names contradictions, blanks and the verdict", () => {
@@ -283,7 +324,7 @@ test("the .txt report names contradictions, blanks and the verdict", () => {
   assert.match(txt, /‹‹forty dollars››/, "the contradicted words should be marked in the body");
   assert.match(txt, /MISMATCH — call says "forty dollars"/);
   assert.match(txt, /MISSING FROM FORM/);
-  assert.match(txt, /Insurance rep name/, "the blank required field should be listed");
+  assert.match(txt, /Insurance Rep/, "the blank required field should be listed");
 });
 
 // ---------------- long transcripts ----------------
