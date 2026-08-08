@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { checkTranscript } from "./verify.js";
+import { ASH_CALL } from "./ash.fixture.js";
 
 // A perfect nine-field auto-fill once displayed as nine failures, because four
 // separate lookup tables had no entry for the `autofill` status and fell through
@@ -57,6 +59,20 @@ test("DISPLAY every verdict has a colour, in both places a verdict is shown", ()
   }
 });
 
+test("DISPLAY every verdict has a sentence telling the operator what was saved", () => {
+  // The same defect one layer over: this chain had no ATTESTED branch, so the
+  // operator finished signing off twenty-three values read from a call and was
+  // told no transcript was attached. Nothing threw; the record itself was right.
+  const src = read("../App.jsx");
+  const at = src.indexOf("const SAVED = {");
+  assert.ok(at >= 0, "the save message must be a table, not a chain — a chain hides the gap");
+  const body = src.slice(at, src.indexOf("};", at) + 2);
+  for (const vd of VERDICTS) {
+    assert.ok(body.includes(JSON.stringify(vd)) || body.includes(vd + ":"),
+      `the save message has no case for "${vd}"`);
+  }
+});
+
 test("DISPLAY every field-state kind has a label", async () => {
   const { KIND_LABEL } = await import("./fieldState.js");
   const src = read("./fieldState.js");
@@ -71,4 +87,39 @@ test("DISPLAY the statuses this test knows about are the ones the engine emits",
   const src = read("./verify.js");
   const emitted = new Set([...src.matchAll(/status:\s*"([a-z]+)"/g)].map((m) => m[1]));
   for (const s of emitted) assert.ok(STATUSES.includes(s), `verify.js emits "${s}", which this test does not cover`);
+});
+
+// ---------------- a correct machine-read value never shows as an error ----------------
+
+test("DISPLAY a machine-read value the matcher cannot re-place is not an error", () => {
+  // The two engines reach a value by different routes. applyExtraction has already
+  // confirmed nothing contradicts it before it was written, so "the anchors cannot
+  // reach it" is a fact about the matcher, not the value. Rendering ✗ marks a
+  // correct value as wrong with no action that clears it — the worst outcome
+  // available, because the operator either retypes what is already right or stops
+  // trusting the marks. On the reference call this hit three of twenty-three.
+  const form = { dedRem: "$1250.00" };
+  const meta = { dedRem: { source: "call", extract: { value: "$1250.00", quote: "…", score: 1 } } };
+  const t = "Agent: What is the deductible?\nRep: One thousand two hundred fifty dollars is where they stand right now on that.\n";
+  const c = checkTranscript(form, t, meta).checks.find((x) => x.key === "dedRem");
+  assert.ok(c.status === "autofill" || c.status === "attested", `got ${c.status}`);
+  assert.ok(c.unplaced, "and it says so, rather than pretending the match was clean");
+  assert.ok(keysOf(read("../components/TranscriptView.jsx"), "TICK").has(c.status));
+});
+
+test("DISPLAY a machine-read value the rep contradicted still fails", () => {
+  // The exclusion that makes the rule above safe to state.
+  const form = { tfl: "90 DAYS" };
+  const meta = { tfl: { source: "call", extract: { value: "90 DAYS", quote: "…", score: 1 } } };
+  const c = checkTranscript(form, ASH_CALL, meta).checks.find((x) => x.key === "tfl");
+  assert.equal(c.status, "mismatch");
+});
+
+test("DISPLAY editing a machine-read value hands it back to the ordinary grading", () => {
+  // Once the box no longer holds what the machine wrote, it is the operator's value
+  // and gets no protection from having been auto-filled once.
+  const meta = { dedRem: { source: "call", extract: { value: "$1250.00", quote: "…", score: 1 } } };
+  const t = "Agent: What is the deductible?\nRep: One thousand two hundred fifty dollars is where they stand right now on that.\n";
+  const c = checkTranscript({ dedRem: "$9999.00" }, t, meta).checks.find((x) => x.key === "dedRem");
+  assert.notEqual(c.status, "autofill");
 });

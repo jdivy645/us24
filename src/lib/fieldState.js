@@ -70,9 +70,12 @@ export function fieldStates(v, meta, result, comp, { suggest = {}, conflict = {}
     } else if (c.dispute) {
       s = { kind: "contested", heard: c.dispute.heard, confidence: c.confidence };
     } else if (c.status === "attested") {
-      s = { kind: "attested", quote: ex?.quote, by: ex?.review?.by };
+      s = { kind: "attested", quote: ex?.quote, by: ex?.review?.by, unplaced: c.unplaced };
     } else if (c.status === "autofill") {
-      s = { kind: "autofill", quote: ex?.quote, score: ex?.score };
+      // `unplaced` means the second engine could not point at where in the call
+      // this came from — it did not disagree, it just could not reach it. Worth
+      // saying, because it is the one auto-fill with a single reader behind it.
+      s = { kind: "autofill", quote: ex?.quote, score: ex?.score, unplaced: c.unplaced };
     } else if (c.status === "found") {
       s = { kind: "ok" };
     } else if (c.status === "carrier") {

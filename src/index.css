@@ -206,6 +206,7 @@ label.btn.disabled{opacity:.5;cursor:not-allowed}
 /* Dashed is reserved for "a machine wrote this and nobody has checked it" —
    nothing else in the form uses it, so unsettled fields read at a glance. */
 .f-autofill>input,.f-autofill>select{border-left:3px dashed #2C6FB8;background:#F5F9FE}
+.fs-weak{color:#8A6D1F;background:#FDF6E3;border:1px solid #F0E0B0;border-radius:3px;padding:0 5px;font-size:11px;white-space:nowrap}
 .f-attested>input,.f-attested>select{border-left:3px solid #7FC3AA}
 .f-filedisagree>input,.f-filedisagree>select{border-left:3px solid #2C6FB8;background:#F5F9FE}
 .fs.auto{color:#2C6FB8}

@@ -27,6 +27,7 @@ function Status({ s, set, onKeep, onAccept, onReject, onUseSuggestion, onShowInC
     return (
       <div className="fs auto">
         <span className="fs-quote">Rep said “{clamp(s.quote)}”</span>
+        {s.unplaced && <span className="fs-weak">one reading only — worth a look</span>}
         <button type="button" className="btn btn-dark btn-xs" onClick={() => onAccept([s.key])}>Accept</button>
         <button type="button" className="btn btn-ghost btn-xs" onClick={() => onReject(s.key)}>Clear</button>
         {onShowInCall && <button type="button" className="btn btn-ghost btn-xs" onClick={() => onShowInCall(s)}>Show in call</button>}

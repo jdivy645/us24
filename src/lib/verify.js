@@ -15,8 +15,8 @@
 //
 // A found check may additionally carry `dispute`: the typed value WAS said, but a
 // rival value was stated about the same field too. See the contested pass below.
-import { ANCHORS, HEAD_IX, OWN_Q, SIB_Q, MTYPE, TOPIC_TOKENS, FAMILY, KEYWORDS, KEYWORD_WINDOW } from "./anchors.js";
-import { isBypassed, bypassOf, isCarrier, isMachineRead, isAttested } from "./bypass.js";
+import { ANCHORS, HEAD_IX, OWN_Q, SIB_Q, MTYPE, TOPIC_TOKENS, FAMILY, KEYWORDS, KEYWORD_WINDOW, SERVICE_WORDS, serviceCode } from "./anchors.js";
+import { isBypassed, bypassOf, isCarrier, isMachineRead, isAttested, extractOf } from "./bypass.js";
 import { roleAt } from "./transcriptParse.js";
 import { isOnFile } from "./schema.js";
 
@@ -1004,6 +1004,25 @@ function scanCands(prep) {
     const unit = (n1 && UNITS_W.has(n1.t)) || (n1 && (n1.t === "business" || n1.t === "calendar") && n2 && UNITS_W.has(n2.t));
     nums.push({ ti: i, val: Number(tk.t), s: tk.start, e: (dollar || pct || unit) && n1 ? n1.end : tk.end, dollar, pct, unit });
   }
+
+  // Speech self-corrections. "6, uh 6,500 and remaining is 5,473.76" is one figure
+  // stated twice, not two figures — and because the false start comes first it is
+  // nearest to whatever anchor precedes it, so it wins every proximity contest.
+  // On the client's own call that turned the out-of-pocket maximum into $6.
+  //
+  // Only a bare, cue-less integer immediately followed by a longer number it is a
+  // prefix of counts. "20% coinsurance with 20 visits" is two real figures and is
+  // untouched, because 20 is not a prefix of 20.
+  for (let i = nums.length - 1; i > 0; i--) {
+    const a = nums[i - 1], b = nums[i];
+    if (a.dollar || a.pct || a.unit) continue;
+    if (b.ti - a.ti > 3) continue;                       // "uh", "um" — no further
+    const as = String(a.val), bs = String(b.val);
+    if (bs.length <= as.length || !bs.startsWith(as)) continue;
+    let filler = true;
+    for (let k = a.ti + 1; k < b.ti; k++) if (prep.toks[k].num || prep.toks[k].t.length > 3) { filler = false; break; }
+    if (filler) nums.splice(i - 1, 1);
+  }
   for (let i = 0; i < toks.length; i++) {
     if (!toks[i].num) continue;
     let j = i, digits = "";
@@ -1244,6 +1263,42 @@ export function findBest(prep, f, { exclude = [], ranges = null } = {}) {
 // whatever it proposes.
 export { matchEnum, saidByRep, MISMATCH_MIN, AMBIG_GAP };
 
+// Which yes/no topics a stretch of text raises, and which of that field's own
+// qualifiers it uses. "Is authorization required for the initial evaluation?"
+// raises both authEval and authTx — they share the head — and the qualifier is
+// what tells them apart.
+export function yesNoTopicsIn(prep, start, end) {
+  const out = new Map();
+  for (const cl of prep.clauses) {
+    if (prep.toks[cl.i0].start >= end || prep.toks[cl.i1 - 1].end <= start) continue;
+    for (const [key] of clauseAnchors(cl, prep.toks)) {
+      const own = OWN_Q.get(key) || new Set();
+      let hits = 0;
+      for (let i = cl.i0; i < cl.i1; i++) if (own.has(prep.toks[i].t)) hits++;
+      out.set(key, Math.max(out.get(key) || 0, hits));
+    }
+  }
+  return out;
+}
+
+// The polarity of a stretch of text read on its own — for a reply like "Yes." or
+// "No, it is not." that carries no topic of its own and so is invisible to
+// decideYesNo, which needs an anchor in the same clause.
+export function polarityIn(prep, start, end) {
+  let yes = 0, no = 0, span = null;
+  for (const cl of prep.clauses) {
+    const a = prep.toks[cl.i0], b = prep.toks[cl.i1 - 1];
+    if (!a || !b || a.start >= end || b.end <= start) continue;
+    for (const m of polarityMarkers(cl, prep.toks, prep.text)) {
+      if (m.pol === "YES") yes++; else no++;
+      if (!span) span = { start: a.start, end: b.end };
+    }
+  }
+  if (yes && no) return null;                 // the reply says both — decide nothing
+  if (!yes && !no) return null;
+  return { pol: yes ? "YES" : "NO", span: span || { start, end } };
+}
+
 /* ------------------------------------------------------------------ *
  * Public API
  * ------------------------------------------------------------------ */
@@ -1373,6 +1428,39 @@ function matchPresence(prep, f, value) {
 // meta (optional) carries per-field bypasses and provenance — see bypass.js.
 // Omitting it verifies exactly as before, which is what keeps saved records that
 // predate the feature rendering with the verdict they were saved with.
+
+// Grades a typed discipline against the words the call actually used. Unlike every
+// other field this one accepts our own agent's turn: which discipline the
+// verification is FOR is the practice's own fact, stated in the opening line. What
+// it still catches is the disagreement — we typed PT and the whole call was about
+// chiropractic.
+function serviceCheck(prep, base, value) {
+  const want = serviceCode(value);
+  if (!want) return { ...base, status: "quiet", found: false, spans: [] };
+
+  const find = (phrase) => {
+    for (let i = 0; i + phrase.length <= prep.toks.length; i++) {
+      let ok = true;
+      for (let k = 0; k < phrase.length; k++) if (prep.toks[i + k].t !== phrase[k]) { ok = false; break; }
+      if (ok) return { start: prep.toks[i].start, end: prep.toks[i + phrase.length - 1].end };
+    }
+    return null;
+  };
+
+  const mine = find(want.phrase);
+  if (mine) return { ...base, status: "found", found: true, spans: [mine] };
+
+  for (const s of SERVICE_WORDS) {
+    const other = find(s.phrase);
+    if (other) {
+      return { ...base, status: "mismatch", found: false, spans: [],
+        heard: s.value, heardSpans: [other], anchorText: base.label };
+    }
+  }
+  // Nobody named a discipline. That is silence, not a contradiction.
+  return { ...base, status: "quiet", found: false, spans: [] };
+}
+
 export function checkTranscript(v, transcript, meta, opts = {}) {
   const t = (transcript || "").trim();
   const prep = t ? getPrep(t) : null;
@@ -1411,6 +1499,13 @@ export function checkTranscript(v, transcript, meta, opts = {}) {
       else checks.push({ ...base, status: "mismatch", found: false, spans: [], heard: said.pol, heardSpans: [said.span], anchorText: f.label });
       continue;
     }
+
+    // The discipline is the one field whose value is a code the call never says
+    // out loud. "PT" is not absent from a call that spent ten minutes on physical
+    // therapy — it is spelled differently. Grading it by literal presence marked
+    // every correctly filled serviceType as `missing`, an error the operator could
+    // not clear by any action.
+    if (f.key === "serviceType") { checks.push(serviceCheck(prep, base, value)); continue; }
 
     const r = matchPresence(prep, f, value);
     // Our own agent reading a figure back is not the payer confirming it. If the
@@ -1575,8 +1670,30 @@ export function checkTranscript(v, transcript, meta, opts = {}) {
   // Only applied where the status would otherwise be `found`. A mismatch, echo or
   // elsewhere keeps its own status: a machine-read value the rep later contradicted
   // must still fail the record.
+  // `elsewhere` and `missing` join `found` here, and that distinction is the whole
+  // point: a machine-read value is only ever written after applyExtraction has run
+  // this same engine and confirmed nothing CONTRADICTS it. So by the time a value
+  // is in the box, "the matcher cannot place it" is a fact about the matcher's
+  // reach, not about the value — the two engines read the call by different routes
+  // and the extractor exists to cover what the anchors cannot see.
+  //
+  // Showing ✗ there marks a correct value as an error the operator has no action to
+  // clear, which is the one thing worse than not filling it. On the reference call
+  // it did exactly that to three of twenty-three.
+  //
+  // `mismatch` and `echo` are excluded and always will be. Those are the rep saying
+  // something else, and a machine-read value the rep contradicted must fail.
+  // `quiet` is here too, and for the same reason: the yes/no reader reports it when
+  // no polarity attaches to the topic, which is precisely the case the extractor
+  // covers by reading a bare "No, it is not." off the answering turn.
+  const UNCONTRADICTED = new Set(["found", "elsewhere", "missing", "quiet"]);
   for (const c of checks) {
-    if (c.status !== "found" || !isMachineRead(meta, c.key)) continue;
+    if (!UNCONTRADICTED.has(c.status) || !isMachineRead(meta, c.key)) continue;
+    // Only while the box still holds what the machine wrote. Once the operator
+    // edits it, it is their value and it is graded like anyone else's typing.
+    const wrote = (extractOf(meta, c.key) || {}).value;
+    if (String(wrote ?? "").trim() !== String(c.value ?? "").trim()) continue;
+    if (c.status !== "found") { c.unplaced = true; c.spans = []; }
     c.status = isAttested(meta, c.key) ? "attested" : "autofill";
     c.machineRead = true;
   }

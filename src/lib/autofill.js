@@ -192,8 +192,20 @@ export function applyExtraction(form, meta, decided, { transcript, ranges, by = 
   // good new fill — non-deterministically, depending on how much was prefilled.
   const probeMeta = { ...meta, ...Object.fromEntries(keys.map((k) => [k, { ...meta[k], source: "call" }])) };
   const r = keys.length ? checkTranscript(candidate, transcript, probeMeta, { ranges }) : { checks: [] };
-  const ok = new Set(r.checks.filter((c) => c.status === "found").map((c) => c.key));
-  const survived = new Set(keys.filter((k) => ok.has(k)));
+
+  // The check is that the matcher does not CONTRADICT the value — not that it
+  // independently rediscovers it. The two reach a value by different routes, and
+  // the matcher has blind spots the extractor was written to cover: it cannot see
+  // a bare "No, it is not." answering a question asked a turn earlier, so it
+  // reports `quiet` where the extractor correctly read a NO. Demanding `found`
+  // threw away one proposal in six — all of them right.
+  //
+  //   mismatch  the rep said something else. Never write it.
+  //   echo      the matcher places this in our own agent's mouth, and the
+  //             extractor placed it in the rep's. They disagree about who spoke;
+  //             that is exactly the disagreement worth deferring to.
+  const refused = new Set(r.checks.filter((c) => c.status === "mismatch" || c.status === "echo").map((c) => c.key));
+  const survived = new Set(keys.filter((k) => !refused.has(k)));
 
   const nextForm = { ...form }, nextMeta = { ...meta };
   const filled = [], rejected = [];

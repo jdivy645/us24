@@ -227,3 +227,38 @@ test("AUTOFILL an accepted value survives a clear", () => {
   const cleared = clearAutofilled(out.form, meta);
   assert.equal(cleared.form[k], out.form[k], "a signed value is not swept away");
 });
+
+// ---------------- the round trip refuses contradiction, not silence ----------------
+
+// A decision object holding exactly these proposals, so applyExtraction can be
+// aimed at directly without decide()'s guards standing in the way.
+const fillOnly = (obj) => ({ fill: obj, suggest: {}, contested: {}, blocked: {}, derived: {}, skipped: {},
+  counts: { fill: Object.keys(obj).length, suggest: 0, contested: 0, blocked: 0 } });
+
+test("AUTOFILL a value the matcher contradicts is never written", () => {
+  // The safety property that matters: two routes to the same value, and if the
+  // second says the rep said something else, the first one loses.
+  const g = fillOnly({ tfl: { ...d.fill.tfl, value: "90 DAYS" } });
+  const out = applyExtraction({}, {}, g, { transcript: parsed.text, ranges: parsed.ranges });
+  assert.deepEqual(out.filled, [], "the rep said 180 days");
+  assert.deepEqual(out.rejected, ["tfl"]);
+});
+
+test("AUTOFILL a value the matcher merely cannot re-find is still written", () => {
+  // The two engines reach a value by different routes, and the matcher has blind
+  // spots the extractor exists to cover — it cannot see a bare "No, it is not."
+  // answering a question asked a turn earlier. Demanding it independently
+  // rediscover every proposal threw away one in six, all of them correct.
+  const out = applyExtraction({}, {}, d, { transcript: parsed.text, ranges: parsed.ranges });
+  assert.deepEqual(out.rejected, []);
+  assert.equal(out.filled.length, Object.keys(d.fill).length);
+});
+
+test("AUTOFILL nothing is written without a transcript to check against", () => {
+  // Skipping the check would write every proposal with nothing having verified it,
+  // which is the one thing this function exists to prevent.
+  const g = fillOnly({ groupId: d.fill.groupId });
+  const out = applyExtraction({}, {}, g, { transcript: "", ranges: null });
+  assert.deepEqual(out.filled, []);
+  assert.deepEqual(out.rejected, ["groupId"]);
+});

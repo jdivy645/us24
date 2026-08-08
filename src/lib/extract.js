@@ -11,8 +11,8 @@
 //
 // One rule decides the rest: a wrong auto-filled value is worse than a blank one,
 // because the operator will skim past it. When in doubt, skip and record why.
-import { ANCHORS, KEYWORD_WINDOW } from "./anchors.js";
-import { VERIFY_FIELDS, findBest, decideYesNo, matchEnum, saidByRep } from "./verify.js";
+import { ANCHORS, OWN_Q, KEYWORD_WINDOW, SERVICE_WORDS } from "./anchors.js";
+import { VERIFY_FIELDS, findBest, decideYesNo, matchEnum, saidByRep, yesNoTopicsIn, polarityIn } from "./verify.js";
 import { roleAt } from "./transcriptParse.js";
 import { classOf, isStrict } from "./schema.js";
 
@@ -97,6 +97,11 @@ const INTERNAL = new Set(["today", "verifiedBy", "note"]);
 
 export const NEVER_EXTRACT = new Set([...PROSE, ...IDENTITY, ...INTERNAL]);
 
+// serviceType is prose by measurement — there is no number or date to anchor — but
+// it is the one prose field drawn from a closed set of four disciplines, so it can
+// be read off the words directly rather than guessed at. See serviceTypeFrom.
+NEVER_EXTRACT.delete("serviceType");
+
 const policyReason = (k) =>
   INTERNAL.has(k) ? "internal-bookkeeping"
     : IDENTITY.has(k) ? "identity-supplied-by-provider"
@@ -131,12 +136,168 @@ function networkFrom(prep, ranges, key) {
   return { value: inn.found ? "IN NETWORK" : "OUT OF NETWORK", span: spans[0] };
 }
 
+const YESNO_KEYS = VERIFY_FIELDS.filter((f) => f.type === "yesno").map((f) => f.key);
+
+// The one yes/no field whose own qualifier this stretch of text uses. Returns
+// null when none or more than one match — a word shared by two fields places
+// neither.
+function onlyQualifierMatch(prep, start, end) {
+  const words = new Set(prep.toks.filter((t) => t.start >= start && t.end <= end).map((t) => t.t));
+  const hits = YESNO_KEYS.filter((k) => {
+    const own = OWN_Q.get(k);
+    if (!own || !own.size) return false;
+    for (const w of own) if (words.has(w)) return true;
+    return false;
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
+// An actual yes or no, in words. Without this the "an amount is itself an answer"
+// rule inside the polarity reader makes any figure count as a YES — and a reply of
+// "180 days from the date of service" then answers a question it was never asked.
+const RE_EXPLICIT = /\b(?:yes|yeah|yep|yup|correct|right|affirmative|no|nope|nah|not|never|none)\b/i;
+
+// "We wouldn't be able to see that on our end" is not a no. It is the rep saying
+// they cannot tell you, which is the one answer the form must not record as fact.
+const RE_NON_ANSWER = /\b(?:not able|wouldn'?t be able|would not be able|can'?t see|cannot see|can'?t tell|don'?t have|do not have|unable|no access|not showing|wouldn'?t know|check with)\b/i;
+
+// A polar question — one that can be answered yes or no. A "what is…" question
+// takes a value, and reading its answer as a polarity is how a deductible figure
+// came to decide whether authorization was required.
+const RE_WH = /\b(?:what|when|where|which|who|why|how)\b/i;
+const RE_AUX = /\b(?:is|are|was|were|do|does|did|can|could|will|would|should|has|have|had|any)\b/i;
+
+function isPolarQuestion(text) {
+  if (RE_WH.test(text)) return false;
+  if (RE_AUX.test(text)) return true;
+  // An elliptical follow-up — "And for treatment?" — carries no auxiliary because
+  // the previous question supplied it.
+  return text.trim().split(/\s+/).length <= 6;
+}
+
+// "Is authorization required for the initial evaluation?" / "Yes."
+//
+// The answer carries no topic of its own, so decideYesNo — which needs an anchor
+// in the same clause — cannot see it at all. On a normally conducted call that is
+// how most of the yes/no fields are established, which is why four of them came
+// back blank on a transcript where the rep answered every one of them plainly.
+function yesNoFromAnswers(prep, ranges) {
+  const out = {};
+  if (!ranges) return out;
+
+  for (let t = 1; t < ranges.length; t++) {
+    if (ranges[t].role !== "rep") continue;
+    // Walk back over the rep's own filler ("One moment.") to the question.
+    let q = t - 1;
+    while (q >= 0 && ranges[q].role !== "agent" && t - q <= 2) q--;
+    if (q < 0 || ranges[q].role !== "agent") continue;
+
+    // A short, direct reply. A long one has moved on to another subject and its
+    // own anchors will be found the ordinary way.
+    if (ranges[t].end - ranges[t].start > 120) continue;
+    const answer = prep.text.slice(ranges[t].start, ranges[t].end);
+    const question = prep.text.slice(ranges[q].start, ranges[q].end);
+    if (!isPolarQuestion(question)) continue;
+    if (!RE_EXPLICIT.test(answer) || RE_NON_ANSWER.test(answer)) continue;
+    const said = polarityIn(prep, ranges[t].start, ranges[t].end);
+    if (!said) continue;
+
+    // Which topic was asked. Fields sharing a head are separated by whichever
+    // one's own qualifier the question actually used; a tie names neither.
+    const topics = yesNoTopicsIn(prep, ranges[q].start, ranges[q].end);
+    let key = null;
+    if (topics.size) {
+      const best = Math.max(...topics.values());
+      const winners = [...topics].filter(([, hits]) => hits === best).map(([k]) => k);
+      if (winners.length !== 1) continue;
+      key = winners[0];
+    } else {
+      // An elliptical follow-up — "And for treatment?" — carries no head of its
+      // own; the subject was established by the question before it. A qualifier
+      // that belongs to exactly one yes/no field is enough to place it, and a
+      // word shared by two is not.
+      key = onlyQualifierMatch(prep, ranges[q].start, ranges[q].end);
+      if (!key) continue;
+    }
+    if (out[key]) continue;                      // the first answer stands
+    out[key] = { pol: said.pol, span: said.span, qSpan: { start: ranges[q].start, end: ranges[q].end } };
+  }
+  return out;
+}
+
 function nearHead(prep, span, heads) {
   const ti = prep.toks.findIndex((t) => t.end > span.start);
   if (ti < 0) return false;
   const lo = Math.max(0, ti - KEYWORD_WINDOW), hi = Math.min(prep.toks.length, ti + KEYWORD_WINDOW);
   const words = prep.toks.slice(lo, hi).map((t) => t.t);
   return (heads || []).some((p) => hasPhrase(words, p));
+}
+
+/* ----------------------------------------------------------- service type */
+
+// The words that mark our own agent stating the purpose of the call: "benefits
+// for physical therapy", "calling about chiropractic". Not any mention — a
+// discipline named in passing is not what this verification is for.
+const REQUEST_HEADS = [
+  ["benefits", "for"], ["eligibility", "for"], ["coverage", "for"], ["verify"],
+  ["verification", "for"], ["calling", "about"], ["calling", "for"], ["regarding"],
+  ["need"], ["want"], ["checking", "on"], ["check", "on"],
+];
+
+function findAll(prep, phrase) {
+  const out = [];
+  for (let i = 0; i + phrase.length <= prep.toks.length; i++) {
+    let ok = true;
+    for (let k = 0; k < phrase.length; k++) if (prep.toks[i + k].t !== phrase[k]) { ok = false; break; }
+    if (ok) out.push({ i, span: { start: prep.toks[i].start, end: prep.toks[i + phrase.length - 1].end } });
+  }
+  return out;
+}
+
+// True if one of REQUEST_HEADS sits just before this discipline. The window is
+// short on purpose: "benefits for physical therapy" qualifies, "benefits … and by
+// the way the patient also had physical therapy last year" does not.
+const isRequested = (prep, i) => {
+  const words = prep.toks.slice(Math.max(0, i - 4), i).map((t) => t.t);
+  return REQUEST_HEADS.some((h) => hasPhrase(words, h));
+};
+
+// serviceType is the one field where our own agent is the authority. They are the
+// ones who know which discipline this verification is for — it is the reason for
+// the call, stated in its opening line. The rep only ever confirms it, and often
+// answers by reading out every discipline the plan covers, which is a different
+// fact. So:
+//
+//   one discipline from the rep          -> that one
+//   several from the rep, one requested  -> the requested one; the rep was listing
+//                                           what the plan covers, our agent was
+//                                           saying which one we are billing
+//   none from the rep, one requested     -> the requested one, marked as ours
+//
+// The real ASH call is the argument for the middle rule: the rep says "physical
+// therapy occupational therapy benefits", and the VOB says PT, because PT is what
+// the agent asked about in the first turn.
+function serviceTypeFrom(prep, ranges) {
+  const rep = [], asked = [];
+  for (const s of SERVICE_WORDS) {
+    let repHit = null, askedHit = null;
+    for (const h of findAll(prep, s.phrase)) {
+      const byRep = !ranges || saidByRep(ranges, [h.span]);
+      if (byRep && !repHit) repHit = { value: s.value, span: h.span };
+      if (!byRep && !askedHit && isRequested(prep, h.i)) askedHit = { value: s.value, span: h.span };
+    }
+    if (repHit) rep.push(repHit);
+    if (askedHit) asked.push(askedHit);
+  }
+
+  if (rep.length === 1) return { ...rep[0], by: "rep" };
+  if (asked.length === 1) {
+    const a = asked[0];
+    // Only where the rep either said nothing or included it in their list. A rep
+    // naming a different discipline entirely is a disagreement, not a detail.
+    if (!rep.length || rep.some((r) => r.value === a.value)) return { ...a, by: "agent" };
+  }
+  return null;
 }
 
 /* ---------------------------------------------------------------- derived */
@@ -224,8 +385,20 @@ export function extractFromTranscript(prep, { ranges = null, exclude = [] } = {}
 
   // ---- 1. yes / no ---------------------------------------------------------
   const yn = decideYesNo(prep);
+  const answered = yesNoFromAnswers(prep, ranges);
   for (const f of VERIFY_FIELDS) {
     if (f.type !== "yesno" || NEVER_EXTRACT.has(f.key)) continue;
+
+    // A bare "Yes." answering a question that named the topic. Preferred over the
+    // clause reader: the rep answering the question they were just asked is the
+    // most direct evidence there is.
+    if (answered[f.key]) {
+      const a = answered[f.key];
+      values[f.key] = propose(f.key, a.pol, null, a.span,
+        `The rep answered ${a.pol} to a question about this.`);
+      continue;
+    }
+
     const said = yn.get(f.key);
     if (!said) { note(f.key, "topic-never-came-up"); continue; }
     // decideYesNo is speaker-blind by design — it has to be, for a plain
@@ -241,6 +414,16 @@ export function extractFromTranscript(prep, { ranges = null, exclude = [] } = {}
     const n = networkFrom(prep, ranges, key);
     if (!n) { note(key, "topic-never-came-up"); continue; }
     values[key] = propose(key, n.value, null, n.span, `The rep said "${n.value.toLowerCase()}".`);
+  }
+
+  // ---- 2b. service type ----------------------------------------------------
+  {
+    const svc = serviceTypeFrom(prep, ranges);
+    if (svc) {
+      values.serviceType = propose("serviceType", svc.value, null, svc.span,
+        svc.by === "rep" ? "The rep named this discipline."
+          : "This is the discipline the call was placed about.");
+    } else note("serviceType", "topic-never-came-up");
   }
 
   // ---- 3. numbers, dates, IDs ---------------------------------------------

@@ -245,18 +245,49 @@ export default function App() {
   };
 
   // Look up everything already known about this patient and payer, and offer it.
-  const handleLookup = async () => {
+  const lookup = async (announce) => {
     try {
       const p = await db.buildPrefill({
         lastName: v.lastName, firstName: v.firstName, dob: v.dob,
         insName: v.insName, policyId: v.policyId, serviceType: v.serviceType,
       });
       setPrefill(p);
-      if (!p.patient && !p.carrier) toast("Nothing on file for this patient or payer yet", "warn");
+      if (announce && !p.patient && !p.carrier) toast("Nothing on file for this patient or payer yet", "warn");
+      return p;
     } catch (e) {
-      toast("Lookup failed: " + (e?.message || e), "bad");
+      if (announce) toast("Lookup failed: " + (e?.message || e), "bad");
+      return null;
     }
   };
+
+  const handleLookup = () => lookup(true);
+
+  // The red fields on the client's template come from our own records, so they
+  // should arrive without anyone asking for them. As soon as there is enough to
+  // identify a patient or name a payer, load what we hold and fill the blanks.
+  //
+  // Keyed on the identifying values rather than the whole form, so it does not
+  // re-run on every keystroke elsewhere; applyPrefill never overwrites anything
+  // typed, so a late-arriving record cannot take a value out of someone's hands.
+  const fileRef = useRef("");
+  useEffect(() => {
+    const key = [v.lastName, v.firstName, v.dob, v.insName].join("|");
+    if (key === "|||" || fileRef.current === key) return;
+    if (!v.insName && !(v.lastName && v.dob)) return;   // not enough to look anything up
+    fileRef.current = key;
+    let cancelled = false;
+    const id = setTimeout(async () => {
+      const p = await lookup(false);
+      if (!p || cancelled) return;
+      const next = applyPrefill(form, meta, p);
+      if (!next.filled.length) return;
+      setForm(next.form);
+      setMeta(next.meta);
+      const onFile = next.filled.filter(isOnFile).length;
+      toast(`Filled ${next.filled.length} field(s) from our records${onFile ? ` — ${onFile} will not be chased on the call` : ""}`);
+    }, 400);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [v.lastName, v.firstName, v.dob, v.insName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The red fields on the client's template: patient name, DOB, payer phone, payer
   // ID, claim address, filing limits. We already hold these, so they are filled
@@ -436,11 +467,18 @@ export default function App() {
         setUpload(NO_UPLOAD);
       }
       const exceptions = bypassedKeys(savedMeta).length + carrierKeys(savedMeta).length;
-      const base =
-        res.verdict === "APPROVED" ? `Saved — APPROVED, all ${res.total} details matched`
-          : res.verdict === "REJECTED" ? `Saved — REJECTED, ${res.mismatched.length} contradicted, ${res.missing.length} not heard`
-            : res.verdict === "UNVERIFIED" ? "Saved — nothing to verify against the transcript"
-              : "Saved — no transcript attached, verification skipped";
+      // Every verdict needs its own branch. ATTESTED was added after this chain was
+      // written and fell through to the last line, so the operator finished signing
+      // off twenty-three values read from a call and was told no transcript was
+      // attached — the most alarming sentence available, at the moment of success.
+      const SAVED = {
+        APPROVED: () => `Saved — APPROVED, all ${res.total} details matched`,
+        ATTESTED: () => `Saved — ATTESTED, ${res.attested.length} read from the call and accepted by you`,
+        REJECTED: () => `Saved — REJECTED, ${res.mismatched.length} contradicted, ${res.missing.length} not heard`,
+        UNVERIFIED: () => "Saved — nothing to verify against the transcript",
+        "NO TRANSCRIPT": () => "Saved — no transcript attached, verification skipped",
+      };
+      const base = (SAVED[res.verdict] || SAVED["NO TRANSCRIPT"])();
       const tail = [
         out.seq > 1 ? `version ${out.seq} of this case` : out.isNewCase ? "new case" : "",
         out.changed.length ? `changed: ${out.changed.map((k) => (HEAD[k] || k).toLowerCase()).join(", ")}` : "",

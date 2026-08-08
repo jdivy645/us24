@@ -94,8 +94,11 @@ export const ANCHORS = {
     heads: [["authorization"], ["auth"], ["precert"], ["precertification"], ["preauthorization"]] },
   authTx: { m: "yesno", g: "auth", q: ["treatment", "treatments", "ongoing", "subsequent", "therapy", "visits"],
     heads: [["authorization"], ["auth"], ["precert"], ["precertification"], ["preauthorization"]] },
-  referral: { m: "yesno", heads: [["referral"], ["referrals"]] },
-  pcpRef: { m: "yesno", heads: [["pcp"], ["primary", "care"]] },
+  // These two share the word "referral" — "is a PCP referral required for
+  // approval?" raises both. The qualifiers are what tell them apart, and without
+  // them a question naming one answered neither.
+  referral: { m: "yesno", q: ["referral", "referrals"], heads: [["referral"], ["referrals"]] },
+  pcpRef: { m: "yesno", q: ["pcp", "primary", "care", "physician", "approval"], heads: [["pcp"], ["primary", "care"]] },
   hasSec: { m: "yesno", heads: [["secondary"], ["supplemental"], ["supplement"], ["cob"], ["other", "insurance"], ["other", "coverage"]] },
 
   // never accused of a mismatch — speech mangles these
@@ -203,3 +206,22 @@ export const KEYWORDS = {
 };
 
 export const KEYWORD_WINDOW = 15;
+
+// The therapy disciplines, the one prose field drawn from a closed set. Shared
+// because two modules need the same table for opposite jobs: extraction reads the
+// spoken phrase off the words, and verification has to grade a typed "PT" against
+// a rep who said "physical therapy" — the letters never appear in the call.
+export const SERVICE_WORDS = [
+  { value: "PT", phrase: ["physical", "therapy"], typed: ["pt", "physical", "physiotherapy"] },
+  { value: "OT", phrase: ["occupational", "therapy"], typed: ["ot", "occupational"] },
+  { value: "ST", phrase: ["speech", "therapy"], typed: ["st", "speech", "slp"] },
+  { value: "Chiropractic", phrase: ["chiropractic"], typed: ["chiro", "chiropractic", "dc"] },
+];
+
+// Whatever the operator typed -> the discipline, or null if it is not one of them.
+export function serviceCode(value) {
+  const w = String(value || "").toLowerCase().match(/[a-z]+/g) || [];
+  if (!w.length) return null;
+  for (const s of SERVICE_WORDS) if (w.some((t) => s.typed.includes(t))) return s;
+  return null;
+}

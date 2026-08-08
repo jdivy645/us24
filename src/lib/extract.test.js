@@ -33,6 +33,7 @@ test("EXTRACT the real call yields exactly what the rep actually stated", () => 
     groupId: "00633434",
     authAfter: "8",
     tfl: "180 DAYS",   // no "FROM DOS": the rep's phrase came through as "data service"
+    serviceType: "PT", // from our own opening turn — see the exception below
   });
 });
 
@@ -56,6 +57,7 @@ test("EXTRACT would have prevented every data-entry defect in this record", () =
 
 test("EXTRACT nothing our own agent said is ever proposed", () => {
   for (const [k, p] of Object.entries(x.values)) {
+    if (k === "serviceType") continue;   // the one exception, argued below
     assert.notEqual(roleAt(parsed.ranges, p.span.start), "agent", `${k} was proposed from our own turn`);
   }
   // "The member has met 526.24, right?" is Savi's arithmetic. The rep answered the
@@ -65,6 +67,36 @@ test("EXTRACT nothing our own agent said is ever proposed", () => {
   for (const k of ["dedMet", "dedRem"]) {
     assert.ok(!parsed.text.slice(x.values[k].span.start, x.values[k].span.end).includes("526"), k);
   }
+});
+
+test("EXTRACT the discipline is the one exception to that, and only that", () => {
+  // Which discipline this verification is FOR is a fact our own side owns — it is
+  // the reason for the call, stated in its first turn. The rep only confirms it,
+  // and on this call answers by listing everything the plan covers ("physical
+  // therapy occupational therapy benefits"), which is a different fact. The VOB
+  // says PT because PT is what Savi asked about.
+  assert.equal(x.values.serviceType.value, "PT");
+  assert.equal(roleAt(parsed.ranges, x.values.serviceType.span.start), "agent");
+  assert.match(x.values.serviceType.why, /the call was placed about/);
+
+  // And it is genuinely the only one: no other field may take this route.
+  const fromUs = Object.keys(x.values).filter((k) => roleAt(parsed.ranges, x.values[k].span.start) === "agent");
+  assert.deepEqual(fromUs, ["serviceType"]);
+});
+
+test("EXTRACT a discipline mentioned in passing is not what the call is about", () => {
+  // The request words are what separate "benefits for physical therapy" from a
+  // discipline that merely comes up. Without them our own side's small talk would
+  // set the field.
+  const t = [
+    "Agent: Hi, this is Tom. The patient had physical therapy last year somewhere else.",
+    "Rep: Okay, let me pull up the member for you now.",
+    "Agent: I need eligibility please.",
+    "Rep: Sure, one moment for you there.",
+  ].join("\n");
+  const q = parseTranscript(t, { insName: "AETNA", verifiedBy: "Tom" });
+  const y = extractFromTranscript(getPrep(q.text), { ranges: q.ranges });
+  assert.ok(!("serviceType" in y.values));
 });
 
 test("EXTRACT is refused entirely on a transcript with no rep turn", () => {
@@ -107,7 +139,12 @@ test("EXTRACT everything it proposes verifies as found against the same call", (
   // it is a defect the operator would have to clear before saving.
   const meta = Object.fromEntries(Object.keys(got).map((k) => [k, { source: "rep" }]));
   const r = checkTranscript(got, parsed.text, meta, { ranges: parsed.ranges });
-  for (const c of r.checks) assert.equal(c.status, "found", `${c.key} = ${c.value}`);
+  // serviceType excepted: it has no number or date to anchor, so the matcher has
+  // nothing to grade it against. It is read off a closed word set instead.
+  for (const c of r.checks) {
+    if (c.key === "serviceType") continue;
+    assert.equal(c.status, "found", `${c.key} = ${c.value}`);
+  }
   assert.deepEqual(r.missing, []);
   assert.deepEqual(r.mismatched, []);
   assert.equal(r.verdict, "APPROVED");
