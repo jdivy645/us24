@@ -6,7 +6,7 @@ import ImportPanel from "./components/ImportPanel.jsx";
 import Toasts from "./components/Toast.jsx";
 import NewVerification from "./screens/NewVerification.jsx";
 import Records from "./screens/Records.jsx";
-import WorkQueue from "./screens/WorkQueue.jsx";
+import AuthQueue from "./screens/AuthQueue.jsx";
 import Errors from "./screens/Errors.jsx";
 import Dashboard from "./screens/Dashboard.jsx";
 import Admin from "./screens/Admin.jsx";
@@ -20,7 +20,7 @@ import Admin from "./screens/Admin.jsx";
 const SCREENS = [
   { id: "form", label: "New verification" },
   { id: "records", label: "Saved records" },
-  { id: "queue", label: "Work queue" },
+  { id: "queue", label: "Auth Queue" },
   { id: "errors", label: "Errors" },
   { id: "dashboard", label: "Dashboard" },
   { id: "admin", label: "Admin" },
@@ -206,7 +206,7 @@ export default function App() {
           onReverify={reverify} onCorrect={correct} />
       )}
       {screen === "queue" && (
-        <WorkQueue records={records} projects={projects} currentUser={currentUser} toast={toast}
+        <AuthQueue records={records} projects={projects} currentUser={currentUser} toast={toast}
           onReload={reload} onCorrect={correct} />
       )}
       {screen === "errors" && (

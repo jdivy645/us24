@@ -19,7 +19,7 @@ const LANES = [
   { key: "draft", hint: "Saved but never submitted" },
 ];
 
-export default function WorkQueue({ records, projects, currentUser, toast, onReload, onCorrect }) {
+export default function AuthQueue({ records, projects, currentUser, toast, onReload, onCorrect }) {
   const [filters, setFilters] = useState({ sort: "_savedAt", dir: "asc" });
   const [lane, setLane] = useState("auth_pending");
   const [openId, setOpenId] = useState(null);
@@ -66,7 +66,7 @@ export default function WorkQueue({ records, projects, currentUser, toast, onRel
       <div className="card">
         <div className="card-head">
           <div>
-            <h2>Work queue</h2>
+            <h2>Auth Queue</h2>
             <p>
               {lane === "auth_pending"
                 ? "These need an authorization before anyone checks them."

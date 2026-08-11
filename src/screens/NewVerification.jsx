@@ -257,10 +257,27 @@ export default function NewVerification({ toast, currentUser, projects = [], han
   };
 
   const handleUseSuggestion = (p) => {
-    const out = useSuggestion(form, meta, p, v.verifiedBy);
+    const out = useSuggestion(form, meta, p, v.username || v.verifiedBy);
     setForm(out.form);
     setMeta(out.meta);
     toast(`${HEAD[p.key]} set from the call`);
+  };
+
+  // Every offered value at once. Applied in a single pass over local copies rather
+  // than through setState per proposal — React batches the updates, so calling the
+  // single-value handler in a loop would read the same stale form each time and
+  // only the last one would survive.
+  const handleUseAllSuggestions = (list) => {
+    const proposals = (list || []).filter((p) => p && !String(v[p.key] || "").trim());
+    if (!proposals.length) { toast("Nothing left to put in", "warn"); return; }
+    let f = form, m = meta;
+    for (const p of proposals) {
+      const out = useSuggestion(f, m, p, v.username || v.verifiedBy);
+      f = out.form; m = out.meta;
+    }
+    setForm(f);
+    setMeta(m);
+    toast(`Put ${proposals.length} value${proposals.length > 1 ? "s" : ""} from the call into the form — check each one`, "warn");
   };
 
   // Scroll the transcript box to the words the value came from, rather than
@@ -649,6 +666,7 @@ export default function NewVerification({ toast, currentUser, projects = [], han
               onUseSuggestion={handleUseSuggestion}
               pendingCount={bulkPending.length}
               onAcceptAll={handleAcceptAll}
+              onUseAllSuggestions={handleUseAllSuggestions}
             />
             <PrefillBar
               prefill={prefill}

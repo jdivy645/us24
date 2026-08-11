@@ -22,8 +22,12 @@ const jumpTo = (key) => {
 export default function CallMediaPanel({
   upload, parsed, queue, onTranscriptFiles, onPaste, onClearTranscript, onDownloadText,
   onPickQueued, onSetRole, attributed, readCall, onReadCall, onClearRead, onUseSuggestion,
-  pendingCount = 0, onAcceptAll,
+  pendingCount = 0, onAcceptAll, onUseAllSuggestions,
 }) {
+  // Values the call offered but did not write in. Listed apart from the filled ones
+  // because the two need different actions: a filled value needs accepting, an
+  // offered one needs putting in.
+  const suggestions = Object.values(readCall?.suggest || {});
   const boxRef = useRef(null);
   const [pasting, setPasting] = useState(false);
   const [draft, setDraft] = useState("");
@@ -149,10 +153,12 @@ export default function CallMediaPanel({
             )}
             {parsed.warnings.map((w) => <p key={w} className="hint warn-text">{w}</p>)}
 
-            {/* The call is read and the form filled the moment a transcript is
-                attached. This row reports what happened; it is not a control. */}
+            {/* Reading the call runs by itself when a transcript is attached, but
+                it is also a button. An automatic action with no control is one an
+                operator cannot retry after correcting who the payer is, and cannot
+                tell apart from a feature that did nothing. */}
             <div className="ps-row" style={{ marginTop: 4 }}>
-              <span className="ps-k">Auto-fill</span>
+              <span className="ps-k">From the call</span>
               {!readCall ? (
                 <span className="hint">Reading the call…</span>
               ) : (
@@ -162,6 +168,7 @@ export default function CallMediaPanel({
                     {readCall.counts.suggest ? ` · ${readCall.counts.suggest} to consider` : ""}
                     {readCall.counts.contested + readCall.counts.blocked ? ` · ${readCall.counts.contested + readCall.counts.blocked} left for you` : ""}
                   </span>
+                  <button className="btn btn-dark btn-sm" onClick={onReadCall}>Fill the form from this call</button>
                   {/* One click for everything the call supports, because a good
                       transcript now fills thirty fields and signing for each in
                       turn is how a checklist becomes a reflex. The money and
@@ -172,7 +179,6 @@ export default function CallMediaPanel({
                       Accept all {pendingCount}
                     </button>
                   )}
-                  <button className="btn btn-ghost btn-sm" onClick={onReadCall}>Read again</button>
                   <button className="btn btn-ghost btn-sm" onClick={onClearRead}>Clear what it wrote</button>
                 </>
               )}
@@ -191,9 +197,10 @@ export default function CallMediaPanel({
         {parsed && readCall && (
           <div className="parse-sum" style={{ marginTop: 8 }}>
             <div className="rg-head">
-              Pulled from this call <span className="count">{readCall.counts.fill + readCall.counts.suggest}</span>
+              Written into the form <span className="count">{readCall.counts.fill}</span>
+              <span className="rg-hint">Each one still has to be accepted before the record saves.</span>
             </div>
-            {Object.values({ ...readCall.fill, ...readCall.suggest }).map((p) => (
+            {Object.values(readCall.fill).map((p) => (
               <div key={p.key} className="pull-row">
                 <span className="pull-k">{HEAD[p.key] || p.key}</span>
                 <b>{p.value}</b>
@@ -201,6 +208,33 @@ export default function CallMediaPanel({
                 <button className="btn btn-ghost btn-xs" onClick={() => jumpTo(p.key)}>→ field</button>
               </div>
             ))}
+
+            {/* These were heard but scored below the bar to write in by themselves.
+                They used to be listed here with no way to act on them, so the only
+                route into the form was to remember the value, find the field and
+                type it — which is the work the panel exists to save. */}
+            {suggestions.length > 0 && (
+              <>
+                <div className="rg-head" style={{ marginTop: 10 }}>
+                  Offered, not written in <span className="count">{suggestions.length}</span>
+                  <span className="rg-hint">Below the bar to fill on their own. Put them in if they look right.</span>
+                  {suggestions.length > 1 && (
+                    <button className="btn btn-dark btn-xs" onClick={() => onUseAllSuggestions?.(suggestions)}>
+                      Use all {suggestions.length}
+                    </button>
+                  )}
+                </div>
+                {suggestions.map((p) => (
+                  <div key={p.key} className="pull-row">
+                    <span className="pull-k">{HEAD[p.key] || p.key}</span>
+                    <b>{p.value}</b>
+                    <span className="hint">{p.why || `“${String(p.quote).slice(0, 60)}”`}</span>
+                    <button className="btn btn-dark btn-xs" onClick={() => onUseSuggestion(p)}>Use it</button>
+                    <button className="btn btn-ghost btn-xs" onClick={() => jumpTo(p.key)}>→ field</button>
+                  </div>
+                ))}
+              </>
+            )}
 
             {(readCall.counts.contested + readCall.counts.blocked + Object.keys(readCall.agentOnly || {}).length) > 0 && (
               <>
