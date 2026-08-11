@@ -6,7 +6,8 @@ import ImportPanel from "./components/ImportPanel.jsx";
 import Toasts from "./components/Toast.jsx";
 import NewVerification from "./screens/NewVerification.jsx";
 import Records from "./screens/Records.jsx";
-import QaQueue from "./screens/QaQueue.jsx";
+import WorkQueue from "./screens/WorkQueue.jsx";
+import Errors from "./screens/Errors.jsx";
 import Dashboard from "./screens/Dashboard.jsx";
 import Admin from "./screens/Admin.jsx";
 
@@ -19,7 +20,8 @@ import Admin from "./screens/Admin.jsx";
 const SCREENS = [
   { id: "form", label: "New verification" },
   { id: "records", label: "Saved records" },
-  { id: "qa", label: "QA queue" },
+  { id: "queue", label: "Work queue" },
+  { id: "errors", label: "Errors" },
   { id: "dashboard", label: "Dashboard" },
   { id: "admin", label: "Admin" },
 ];
@@ -84,6 +86,11 @@ export default function App() {
   const queueCount = useMemo(
     () => records.filter((r) => OPEN_STATUSES.includes(r._status)).length, [records]);
 
+  // Findings nobody has fixed yet. Shown on the tab because an open finding is work
+  // outstanding, and a badge is the only thing that makes it visible from elsewhere.
+  const openFindings = useMemo(
+    () => records.reduce((n, r) => n + (r._openCount || 0), 0), [records]);
+
   const switchUser = async (id) => {
     await db.setCurrentUser(id);
     const u = await db.currentUser();
@@ -94,10 +101,23 @@ export default function App() {
   // Sending a saved record back to the form is the one thing that crosses screens,
   // so the shell brokers it. NewVerification clears the handoff once it has loaded
   // it, which keeps a stale record from being re-applied on every later render.
+  //
+  // Two modes, and the difference matters: `reverify` starts a new version from what
+  // this case last looked like; `correct` puts the SAME version right after QA sent
+  // it back. Only one of them creates a record.
   const reverify = (record) => {
-    setHandoff(record);
+    setHandoff({ record, mode: "reverify" });
     go("form");
     toast("Loaded — update what changed and save as a new version");
+  };
+
+  const correct = (record) => {
+    setHandoff({ record, mode: "correct" });
+    go("form");
+    const open = record._openCount || 0;
+    toast(open
+      ? `Correcting — ${open} finding${open > 1 ? "s" : ""} to fix, each marked on its field`
+      : "Correcting — resubmit when you are done");
   };
 
   const openImport = async () => setImporting({ existingKeys: await db.patientKeySet() });
@@ -162,7 +182,8 @@ export default function App() {
           <button key={s.id} className={"tab" + (screen === s.id ? " active" : "")} onClick={() => go(s.id)}>
             {s.label}
             {s.id === "records" && <span className="count">{records.length}</span>}
-            {s.id === "qa" && queueCount > 0 && <span className="count">{queueCount}</span>}
+            {s.id === "queue" && queueCount > 0 && <span className="count">{queueCount}</span>}
+            {s.id === "errors" && openFindings > 0 && <span className="count">{openFindings}</span>}
           </button>
         ))}
       </div>
@@ -181,10 +202,16 @@ export default function App() {
         />
       )}
       {screen === "records" && (
-        <Records records={records} projects={projects} toast={toast} onReload={reload} onReverify={reverify} />
+        <Records records={records} projects={projects} toast={toast} onReload={reload}
+          onReverify={reverify} onCorrect={correct} />
       )}
-      {screen === "qa" && (
-        <QaQueue records={records} projects={projects} currentUser={currentUser} toast={toast} onReload={reload} />
+      {screen === "queue" && (
+        <WorkQueue records={records} projects={projects} currentUser={currentUser} toast={toast}
+          onReload={reload} onCorrect={correct} />
+      )}
+      {screen === "errors" && (
+        <Errors records={records} projects={projects} currentUser={currentUser} toast={toast}
+          onReload={reload} onOpenRecord={correct} />
       )}
       {screen === "dashboard" && <Dashboard records={records} stats={stats} />}
       {screen === "admin" && (

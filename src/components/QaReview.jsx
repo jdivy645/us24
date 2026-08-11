@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import * as db from "../lib/db.js";
 import { F, HEAD, dash, fmtDate } from "../data/fields.js";
-import { PRIORITIES, PRIORITY_LABEL, STATUS, actionsFor, refusal } from "../lib/workflow.js";
+import { PRIORITIES, PRIORITY_LABEL, STATUS, ERROR_CATEGORIES, ERROR_POINTS, recordScore, actionsFor, refusal } from "../lib/workflow.js";
 import PreviewDoc from "./PreviewDoc.jsx";
 import TranscriptView from "./TranscriptView.jsx";
 
@@ -26,7 +26,7 @@ export default function QaReview({ record, currentUser, onClose, onChanged, toas
   const [errors, setErrors] = useState(record._errors || []);
   const [comments, setComments] = useState(record._comments || []);
   const [transcript, setTranscript] = useState("");
-  const [draft, setDraft] = useState({ priority: "P2", fieldKey: "", note: "" });
+  const [draft, setDraft] = useState({ priority: "P2", category: "WRONG_DATA", fieldKey: "", note: "" });
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -52,16 +52,26 @@ export default function QaReview({ record, currentUser, onClose, onChanged, toas
       return;
     }
     await db.addError({ versionId: record._id, ...draft, by });
-    setDraft({ priority: "P2", fieldKey: "", note: "" });
+    setDraft({ priority: "P2", category: "WRONG_DATA", fieldKey: "", note: "" });
     await reload();
     await onChanged?.();
     toast("Finding logged");
   };
 
   const removeError = async (id) => {
+    // Deleting takes the finding out of the quality score. Marking it fixed does
+    // not — which is why "reopen" exists rather than delete-and-retype.
+    if (!window.confirm("Delete this finding? It will stop counting against the quality score.")) return;
     await db.deleteError(id);
     await reload();
     await onChanged?.();
+  };
+
+  const reopen = async (id) => {
+    await db.reopenError(id);
+    await reload();
+    await onChanged?.();
+    toast("Finding reopened");
   };
 
   const addComment = async () => {
@@ -120,16 +130,30 @@ export default function QaReview({ record, currentUser, onClose, onChanged, toas
               <div className="section-label">What QA found</div>
 
               {!errors.length && <p className="hint">Nothing logged against this record yet.</p>}
+              {errors.length > 0 && (
+                <p className="hint">
+                  Quality score {recordScore(errors)} / 100 — {ERROR_POINTS.P1} points for a P1,
+                  {" "}{ERROR_POINTS.P2} for a P2, {ERROR_POINTS.P3} for a P3.
+                </p>
+              )}
               {errors.map((e) => (
                 <div key={e.id} className="rg-row">
                   <div className="rg-main">
                     <span className="rg-label">
                       <span className={"pill " + priorityClass(e.priority)}>{e.priority}</span>{" "}
                       {e.fieldKey ? HEAD[e.fieldKey] || e.fieldKey : "Whole record"}
+                      {e.resolvedAt && <span className="pill ok rg-pill">fixed</span>}
                     </span>
-                    <span className="rg-detail">{e.note || PRIORITY_LABEL[e.priority]} — {e.by || "unknown"}, {when(e.at)}</span>
+                    <span className="rg-detail">
+                      {ERROR_CATEGORIES[e.category] ? `${ERROR_CATEGORIES[e.category]} · ` : ""}
+                      {e.note || PRIORITY_LABEL[e.priority]} — {e.by || "unknown"}, {when(e.at)}
+                      {e.resolvedAt ? ` · fixed by ${e.resolvedBy || "unknown"}, ${when(e.resolvedAt)}` : ""}
+                    </span>
                   </div>
                   <div className="rg-acts">
+                    {e.resolvedAt
+                      ? <button className="btn btn-ghost btn-sm" onClick={() => reopen(e.id)}>Reopen</button>
+                      : null}
                     <button className="btn btn-ghost btn-sm" onClick={() => removeError(e.id)}>Remove</button>
                   </div>
                 </div>
@@ -139,6 +163,13 @@ export default function QaReview({ record, currentUser, onClose, onChanged, toas
                 <select value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: e.target.value })} aria-label="Priority">
                   {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
                 </select>
+                {/* What kind of mistake, not just how bad. Without it the dashboard
+                    can say a team makes ten P2s a week but not what they are. */}
+                <select value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} aria-label="Category">
+                  {Object.entries(ERROR_CATEGORIES).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+                {/* Naming the field is what puts the finding on the operator's form
+                    when the record comes back to them. */}
                 <select value={draft.fieldKey} onChange={(e) => setDraft({ ...draft, fieldKey: e.target.value })} aria-label="Field">
                   <option value="">Whole record</option>
                   {F.map((k) => <option key={k} value={k}>{HEAD[k] || k}</option>)}

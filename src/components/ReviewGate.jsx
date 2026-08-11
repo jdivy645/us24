@@ -19,14 +19,20 @@ const clamp = (s, n = 90) => {
   return t.length > n ? t.slice(0, n) + "…" : t;
 };
 
-function Row({ s, onUse, onKeep, onBypass, onAccept, onReject, onUseSuggestion, onClose }) {
+function Row({ s, onUse, onKeep, onBypass, onAccept, onReject, onUseSuggestion, onResolve, onClose }) {
   const heard = s.heard != null ? String(s.heard).replace(/\s+/g, " ").trim() : "";
   const machine = s.kind === "autofill";
+  const flagged = s.kind === "flagged";
   return (
     <div className={"rg-row" + (s.blocking ? " blocking" : "")}>
       <div className="rg-main">
         <span className="rg-label">{s.label}</span>
-        {machine ? (
+        {flagged ? (
+          <span className="rg-detail">
+            <b>{s.priority}</b> · {s.detail || "flagged by QA"}{s.raisedBy ? ` — ${s.raisedBy}` : ""}
+            {s.value ? ` · currently “${clamp(s.value, 40)}”` : ""}
+          </span>
+        ) : machine ? (
           <span className="rg-detail"><b>{s.value}</b> · rep said “{clamp(s.quote)}”</span>
         ) : s.kind === "required" ? (
           <span className="rg-detail">required, still empty{s.suggestion ? ` · call may say “${s.suggestion.value}”` : ""}</span>
@@ -45,6 +51,12 @@ function Row({ s, onUse, onKeep, onBypass, onAccept, onReject, onUseSuggestion, 
         {s.strict && machine && <span className="pill warn rg-pill">check individually</span>}
       </div>
       <div className="rg-acts">
+        {/* The gate cannot be passed while a finding is open, so it has to be
+            possible to close one from here — otherwise the only way out of the
+            modal is to leave it, which reads as a dead end. */}
+        {flagged && (
+          <button className="btn btn-dark btn-sm" onClick={() => onResolve?.(s.finding)}>Mark fixed</button>
+        )}
         {machine && (
           <>
             <button className="btn btn-dark btn-sm" onClick={() => onAccept([s.key])}>Accept</button>
@@ -74,7 +86,7 @@ function Row({ s, onUse, onKeep, onBypass, onAccept, onReject, onUseSuggestion, 
   );
 }
 
-export default function ReviewGate({ states, onUse, onKeep, onBypass, onAccept, onReject, onUseSuggestion, onClose, onSaveAnyway }) {
+export default function ReviewGate({ states, onUse, onKeep, onBypass, onAccept, onReject, onUseSuggestion, onResolve, onClose, onSaveAnyway }) {
   const groups = reviewGroups(states);
   const blockers = blockingCount(states);
   const exceptions = [...states.values()].filter((s) => s.acked || s.kind === "bypassed").length;
@@ -121,7 +133,8 @@ export default function ReviewGate({ states, onUse, onKeep, onBypass, onAccept, 
               </div>
               {g.items.map((s) => (
                 <Row key={s.key} s={s} onUse={onUse} onKeep={onKeep} onBypass={onBypass}
-                  onAccept={onAccept} onReject={onReject} onUseSuggestion={onUseSuggestion} onClose={onClose} />
+                  onAccept={onAccept} onReject={onReject} onUseSuggestion={onUseSuggestion}
+                  onResolve={onResolve} onClose={onClose} />
               ))}
             </div>
           ))}

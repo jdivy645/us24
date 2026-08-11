@@ -172,7 +172,11 @@ const CLASSES = {
   // `pat` is typed by hand into the summary and belongs to nobody but the person
   // filling the form, so — like the note beside it — there is nothing in the call
   // to grade it against.
-  internal: ["today", "note", "pat", "projectName", "category", "requestMode", "requestDate", "verifType", "username", "initialTx"],
+  // `authStatus` is the outcome of a workflow step, usually obtained through a payer
+  // portal hours after the call ended — there is nothing in the transcript to grade
+  // it against. `vobRequired` is ours to decide before anyone dials.
+  internal: ["today", "note", "pat", "projectName", "category", "requestMode", "requestDate", "verifType",
+    "username", "initialTx", "authStatus", "vobRequired"],
   ask: [
     "policyId", "groupId", "serviceType", "planType", "planName", "network", "networkInd", "coverage",
     "effDate", "termDate", "copayAmt", "visitLimit", "visitUsed", "authWindow", "repName", "callRef",

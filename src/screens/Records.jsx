@@ -33,7 +33,7 @@ const matches = (r, f) => {
   return true;
 };
 
-export default function Records({ records, projects, toast, onReload, onReverify }) {
+export default function Records({ records, projects, toast, onReload, onReverify, onCorrect }) {
   const [filters, setFilters] = useState({ sort: "_savedAt", dir: "desc" });
   const [projectTab, setProjectTab] = useState(ALL);
   const [viewIdx, setViewIdx] = useState(-1);
@@ -165,7 +165,10 @@ export default function Records({ records, projects, toast, onReload, onReverify
             sort={filters.sort}
             dir={filters.dir}
             onSort={onSort}
-            onOpen={(i) => onReverify(rows[i])}
+            // A record QA sent back is corrected in place, not re-verified into a
+            // second version — otherwise the findings stay on version 1 and the
+            // return is invisible on the record that replaced it.
+            onOpen={(i) => (rows[i]._status === "returned" ? onCorrect(rows[i]) : onReverify(rows[i]))}
             onDelete={handleDelete}
             onTranscript={openTranscript}
             onHistory={handleHistory}

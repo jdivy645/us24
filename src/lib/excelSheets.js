@@ -1,7 +1,7 @@
 // Builds the workbook contents as plain data, so the export can be tested without
 // SheetJS or a browser. excel.js is the thin shell that writes the file.
 import { HEAD } from "../data/fields.js";
-import { PRIORITY_LABEL, STATUS } from "./workflow.js";
+import { PRIORITY_LABEL, STATUS, ERROR_CATEGORIES, ERROR_POINTS } from "./workflow.js";
 
 // Excel's real ceiling is 32,767 characters in one cell.
 const CELL_MAX = 32700;
@@ -46,7 +46,7 @@ export const SHEET_SECTIONS = [
   },
   {
     name: "Authorization",
-    keys: [...KEY_COLUMNS, "_authRequired", "authEval", "authTx", "authAfter", "referral", "pcpRef",
+    keys: [...KEY_COLUMNS, "_authRequired", "authStatus", "authEval", "authTx", "authAfter", "referral", "pcpRef",
       "authHow", "authWindow", "authNum", "authDates", "visitLimit", "visitUsed", "initialTx"],
   },
   {
@@ -113,8 +113,13 @@ export function buildSheets(records) {
         "Record ID": v._id || "", Project: v.projectName || "", Patient: who(v),
         "Verification Date": v.today || "", "Entered By": v.username || v.verifiedBy || "",
         Priority: e.priority || "", Severity: PRIORITY_LABEL[e.priority] || "",
+        // Points and category are what make this sheet pivotable — a priority
+        // column alone cannot answer "which mistake is costing us the most".
+        Points: ERROR_POINTS[e.priority] ?? 0,
+        Category: ERROR_CATEGORIES[e.category] || e.category || "",
         Field: e.fieldKey ? HEAD[e.fieldKey] || e.fieldKey : "Whole record",
-        Finding: clamp(e.note || ""), "Raised By": e.by || "", "Raised At": e.at || "",
+        Finding: clamp(e.note || ""), "Raised Against": e.against || "",
+        "Raised By": e.by || "", "Raised At": e.at || "",
         Resolved: e.resolvedAt ? `${e.resolvedBy || "yes"} ${e.resolvedAt}` : "",
       });
     }
@@ -132,7 +137,7 @@ export function buildSheets(records) {
       name: "Error Log",
       header: Object.keys(errorLog[0]),
       rows: errorLog,
-      widths: [22, 18, 24, 16, 16, 10, 16, 22, 50, 16, 22, 20],
+      widths: [22, 18, 24, 16, 16, 10, 16, 8, 22, 22, 50, 16, 16, 22, 20],
     });
   }
 

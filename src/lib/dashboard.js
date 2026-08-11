@@ -3,7 +3,7 @@
 //
 // A pure function of the record rows, so it can be tested without a browser and
 // without a database — the same reason excelSheets.js is shaped this way.
-import { OPEN_STATUSES } from "./workflow.js";
+import { OPEN_STATUSES, ERROR_CATEGORIES, recordScore, isChecked, unresolved } from "./workflow.js";
 import { turnaroundDays } from "./flags.js";
 
 const up = (s) => String(s || "").trim().toUpperCase();
@@ -42,14 +42,46 @@ export function buildDashboard(records, { from = "", to = "" } = {}) {
   for (const r of rows) byVerdict[r._verdict || "NO TRANSCRIPT"] = (byVerdict[r._verdict || "NO TRANSCRIPT"] || 0) + 1;
 
   const byPriority = { P1: 0, P2: 0, P3: 0, NONE: 0 };
+  const byCategoryCounts = new Map();
   let findings = 0;
+  let openFindings = 0;
   for (const r of rows) {
     for (const e of r._errors || []) {
       if (byPriority[e.priority] === undefined) continue;
       byPriority[e.priority] += 1;
-      if (e.priority !== "NONE") findings += 1;
+      if (e.priority === "NONE") continue;
+      findings += 1;
+      if (!e.resolvedAt) openFindings += 1;
+      const label = ERROR_CATEGORIES[e.category] || "Other";
+      byCategoryCounts.set(label, (byCategoryCounts.get(label) || 0) + 1);
     }
   }
+
+  // Where every record sits in the authorization pipeline. Only records that need
+  // one are counted — a record with no authorization required is not "not set", it
+  // is not in this pipeline at all.
+  const needsAuth = rows.filter((r) => r._authRequired === "YES");
+  const authPipeline = [
+    { label: "Approved", count: needsAuth.filter((r) => r.authStatus === "APPROVED").length },
+    { label: "Denied", count: needsAuth.filter((r) => r.authStatus === "DENIED").length },
+    { label: "Pending", count: needsAuth.filter((r) => r.authStatus === "PENDING").length },
+    { label: "Not yet answered", count: needsAuth.filter((r) => !r.authStatus).length },
+  ].filter((x) => x.count > 0);
+
+  // Quality per operator, over their CHECKED records only. Counting unchecked work
+  // as perfect would flatter whoever is furthest behind; counting it as failed would
+  // punish them for QA's backlog. Neither is a measure of their accuracy.
+  const scores = new Map();
+  for (const r of rows) {
+    if (!isChecked(r._errors || [])) continue;
+    const who = String(r.username || r.verifiedBy || "").trim() || "—";
+    const list = scores.get(who) || [];
+    list.push(recordScore(r._errors));
+    scores.set(who, list);
+  }
+  const scoreByOperator = [...scores.entries()]
+    .map(([label, list]) => ({ label, count: Math.round(list.reduce((a, b) => a + b, 0) / list.length), records: list.length }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 
   const turnarounds = rows.map(turnaroundDays).filter((d) => d !== null && d >= 0);
 
@@ -70,6 +102,17 @@ export function buildDashboard(records, { from = "", to = "" } = {}) {
     byVerdict,
     byPriority,
     findings,
+    openFindings,
+    authPipeline,
+    authAnswered: needsAuth.filter((r) => r.authStatus === "APPROVED" || r.authStatus === "DENIED").length,
+    scoreByOperator,
+    // One number for the whole team, over the same checked-only population.
+    qualityScore: checked.length
+      ? Math.round(checked.reduce((n, r) => n + recordScore(r._errors || []), 0) / checked.length)
+      : null,
+    byCategory: [...byCategoryCounts.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
     checked: checked.length,
     cleanRate: checked.length ? Math.round((clean.length / checked.length) * 100) : null,
     medianTurnaround: median(turnarounds),

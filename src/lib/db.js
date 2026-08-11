@@ -10,8 +10,8 @@ import { CARRIER_FIELDS } from "./schema.js";
 import { changedKeys } from "./history.js";
 import { migrateLegacy, toLegacyRow } from "./migrate.js";
 import { buildPrefillForm, referenceFrom, carrierLearnings } from "./prefill.js";
-import { newWorkflow, applyTransition, refusal, topPriority, errorCount, OPEN_STATUSES } from "./workflow.js";
-import { recordFlags } from "./flags.js";
+import { newWorkflow, applyTransition, refusal, topPriority, errorCount, unresolved, recordScore, OPEN_STATUSES } from "./workflow.js";
+import { recordFlags, needsAuthWork } from "./flags.js";
 import { F } from "../data/fields.js";
 
 const nowISO = () => new Date().toISOString();
@@ -379,7 +379,16 @@ export async function saveVerification({ form, transcript, verify, completeness,
     // Who did the work and where it is in the QA cycle. Kept beside the snapshot
     // rather than inside it: the snapshot is what was checked against the call and
     // must not move once it is written, and QA happens afterwards.
-    workflow: newWorkflow({ status, username: val(form, "username") || val(form, "verifiedBy") }),
+    //
+    // A record being sent on is routed by the same question as every later
+    // transition: if the payer said an authorization is required and nobody has one
+    // yet, the next stop is the authorization queue, not QA. A draft is not sent
+    // anywhere, so it is not routed.
+    workflow: newWorkflow({
+      status: status === "draft" ? "draft"
+        : needsAuthWork(snapshot, meta || {}) ? "auth_pending" : "submitted",
+      username: val(form, "username") || val(form, "verifiedBy"),
+    }),
     // Counted by the dashboard. Derived rather than typed, so the count and the
     // answer it came from cannot drift apart.
     flags: recordFlags(snapshot),
@@ -420,7 +429,12 @@ export async function saveVerification({ form, transcript, verify, completeness,
 
   await refreshMirror();
   idb.requestPersistence();
-  return { status: "saved", caseId: nextCase.id, versionId, seq: version.seq, changed, isNewCase, learned: Object.keys(learned) };
+  return {
+    status: "saved", caseId: nextCase.id, versionId, seq: version.seq, changed, isNewCase,
+    // Where it landed, so the caller can say so rather than guess.
+    workflow: version.workflow,
+    learned: Object.keys(learned),
+  };
 }
 
 /* --------------------------------------------------------------- QA and log */
@@ -435,19 +449,93 @@ export async function setStatus(versionId, action, { by = "", role = "agent", no
   if (!version) return { status: "not-found" };
 
   const errors = await idb.byIndex("errors", "by_version", versionId);
+  // Both the gate and the destination are properties of the record, so both are
+  // read from it here rather than passed in by whichever screen called.
+  const outstanding = needsAuthWork(version.form || {}, version.provenance || {});
   const why = refusal(action, {
     status: version.workflow?.status || "finished",
     role,
     errors,
     blocking: 0,
     incomplete: (version.completeness?.blankCount || 0) > 0 && action === "submit",
+    authOutcome: (version.form || {}).authStatus || "",
   });
   if (why) return { status: "refused", reason: why };
 
-  const next = { ...version, workflow: applyTransition(version.workflow, action, { by, note }) };
+  const next = {
+    ...version,
+    workflow: applyTransition(version.workflow, action, { by, note, needsAuthWork: outstanding }),
+  };
   await idb.put("versions", next);
   await refreshMirror();
-  return { status: "ok", workflow: next.workflow };
+  return { status: "ok", workflow: next.workflow, routedToAuth: next.workflow.status === "auth_pending" };
+}
+
+// The authorization stage writes back to the record it belongs to. Deliberately not
+// saveVerification: that mints a new version, and chasing an authorization is the
+// same piece of work continuing, not a second verification of the same benefits.
+export async function updateAuth(versionId, patch, { by = "" } = {}) {
+  const version = await idb.get("versions", versionId);
+  if (!version) return { status: "not-found" };
+
+  const AUTH_KEYS = ["authNum", "authDates", "authHow", "authAfter", "authWindow", "authStatus"];
+  const form = { ...version.form };
+  for (const k of AUTH_KEYS) if (patch[k] !== undefined) form[k] = String(patch[k] ?? "").trim();
+
+  const next = {
+    ...version, form,
+    flags: recordFlags(form),
+    authTouchedAt: nowISO(), authTouchedBy: by,
+  };
+  await idb.put("versions", next);
+  await refreshMirror();
+  return { status: "ok", form };
+}
+
+// A correction is the SAME version put right, not a new one.
+//
+// Routing it through saveVerification would mint version 2 and leave QA's findings
+// attached to version 1 — the return would vanish from the record and the loop
+// would never close. So this writes in place, keeps the id, the sequence number,
+// the findings and the history, and parks the pre-correction snapshot in
+// `correctedFrom` so the original answers are still recoverable.
+export async function saveCorrection(versionId, { form, meta, verify, completeness, by = "", note = "" }) {
+  const version = await idb.get("versions", versionId);
+  if (!version) return { status: "not-found" };
+
+  const errors = await idb.byIndex("errors", "by_version", versionId);
+  const why = refusal("submit", { status: version.workflow?.status || "finished", role: "agent", errors });
+  if (why) return { status: "refused", reason: why };
+
+  const snapshot = Object.fromEntries(F.map((k) => [k, val(form, k)]));
+  const outstanding = needsAuthWork(snapshot, meta || {});
+  const next = {
+    ...version,
+    form: snapshot,
+    provenance: meta || version.provenance || {},
+    verify: verify || version.verify || {},
+    completeness: completeness || version.completeness || {},
+    flags: recordFlags(snapshot),
+    // Only the first correction records the original. A second one is correcting a
+    // correction, and what matters then is still what the record said when QA first
+    // saw it.
+    correctedFrom: version.correctedFrom || version.form,
+    correctedAt: nowISO(),
+    correctedBy: by,
+    workflow: applyTransition(version.workflow, "submit", {
+      by, at: nowISO(), note: note || "corrected", needsAuthWork: outstanding,
+    }),
+  };
+
+  const kase = await idb.get("cases", version.caseId);
+  await idb.tx(["versions", "cases"], "readwrite", (s) => {
+    s.versions.put(next);
+    // The case's cached "latest" must follow, or the records list keeps showing the
+    // uncorrected values.
+    if (kase && kase.latestVersionId === versionId) s.cases.put({ ...kase, latest: snapshot, updatedAt: nowISO() });
+  });
+  await refreshMirror();
+  return { status: "ok", workflow: next.workflow, seq: next.seq };
 }
 
 // Records waiting on somebody. `status` may be a single value or a list.
@@ -462,12 +550,17 @@ export async function listQueue({ status = OPEN_STATUSES, projectName = "", limi
 
 // One QA finding. `fieldKey` is optional: some errors are about the record as a
 // whole ("wrong patient"), not about one box on the form.
-export async function addError({ versionId, priority, fieldKey = "", note = "", by = "" }) {
+export async function addError({ versionId, priority, category = "OTHER", fieldKey = "", note = "", by = "" }) {
   const version = await idb.get("versions", versionId);
   const rec = {
     id: newId("err"), versionId,
     caseId: version?.caseId || "", projectId: version?.form?.projectName || "",
-    priority: String(priority || "NONE").toUpperCase(), fieldKey, note,
+    priority: String(priority || "NONE").toUpperCase(),
+    category: String(category || "OTHER").toUpperCase(),
+    fieldKey, note,
+    // Who the finding is against — the operator, not the checker. Needed to score
+    // an operator without re-reading every record the finding hangs off.
+    against: version?.form?.username || version?.form?.verifiedBy || "",
     by, at: nowISO(), resolvedAt: "", resolvedBy: "",
   };
   await idb.put("errors", rec);
@@ -475,14 +568,29 @@ export async function addError({ versionId, priority, fieldKey = "", note = "", 
   return rec;
 }
 
-export async function listErrors({ versionId = "", projectName = "", priority = "", from = "", to = "" } = {}) {
+export async function listErrors({ versionId = "", projectName = "", priority = "", category = "", state = "", against = "", by = "", from = "", to = "" } = {}) {
   const all = versionId ? await idb.byIndex("errors", "by_version", versionId) : await idb.getAll("errors");
   return all
     .filter((e) => !projectName || norm(e.projectId) === norm(projectName))
     .filter((e) => !priority || e.priority === priority)
+    .filter((e) => !category || e.category === category)
+    .filter((e) => !against || norm(e.against) === norm(against))
+    .filter((e) => !by || norm(e.by) === norm(by))
+    .filter((e) => !state || (state === "open" ? !e.resolvedAt : !!e.resolvedAt))
     .filter((e) => !from || String(e.at).slice(0, 10) >= from)
     .filter((e) => !to || String(e.at).slice(0, 10) <= to)
     .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+}
+
+// Undo for a resolve. Marking something fixed by mistake must not need a delete —
+// deleting a finding takes it out of the quality score, which is not the same thing.
+export async function reopenError(id) {
+  const rec = await idb.get("errors", id);
+  if (!rec) return null;
+  const next = { ...rec, resolvedAt: "", resolvedBy: "" };
+  await idb.put("errors", next);
+  await refreshMirror();
+  return next;
 }
 
 export async function resolveError(id, by = "") {
@@ -530,7 +638,9 @@ export async function listRecent({ limit = 200 } = {}) {
       return toLegacyRow(v, byCase.get(v.caseId), "", {
         errors: mine,
         errorCount: errorCount(mine),
+        openCount: unresolved(mine).length,
         topPriority: topPriority(mine),
+        score: mine.length ? recordScore(mine) : null,
         comments: cmtsBy.get(v.id) || [],
       });
     });

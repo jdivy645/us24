@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { BYPASS_REASONS } from "../lib/bypass.js";
-import { REQUEST_MODES, VERIF_TYPES } from "../data/fields.js";
+import { REQUEST_MODES, VERIF_TYPES, AUTH_STATUSES, YES_NO } from "../data/fields.js";
 
 // Each input carries its own verification state, so a contradiction is visible
 // where the value is typed rather than only in a panel beside it.
@@ -11,6 +11,8 @@ import { REQUEST_MODES, VERIF_TYPES } from "../data/fields.js";
 const GLYPH = {
   ok: "✓", attested: "✓·", autofill: "◆", filedisagree: "⚑",
   conflict: "✗", contested: "!", echo: "↩", carrier: "†", bypassed: "—",
+  // A person, not the engine, said this one is wrong.
+  flagged: "✎",
 };
 
 const clamp = (s, n = 130) => {
@@ -18,9 +20,21 @@ const clamp = (s, n = 130) => {
   return t.length > n ? t.slice(0, n) + "…" : t;
 };
 
-function Status({ s, set, onKeep, onAccept, onReject, onUseSuggestion, onShowInCall }) {
+function Status({ s, set, onKeep, onAccept, onReject, onUseSuggestion, onShowInCall, onResolve }) {
   if (!s) return null;
   const heard = s.heard != null ? String(s.heard).replace(/\s+/g, " ").trim() : "";
+
+  // QA sent this record back naming this field. Shown first and never collapsed:
+  // it is the only status here that came from a person rather than from a matcher.
+  if (s.kind === "flagged") {
+    return (
+      <div className="fs bad">
+        <span className="pill bad">{s.priority}</span>
+        <span>{s.detail || "QA flagged this field"}{s.raisedBy ? ` — ${s.raisedBy}` : ""}</span>
+        <button type="button" className="btn btn-dark btn-xs" onClick={() => onResolve?.(s.finding)}>Mark fixed</button>
+      </div>
+    );
+  }
 
   // Read from the call, nobody has looked. The quote is shown at zero click cost:
   // reading it is the thing actually wanted, so it must be free.
@@ -142,6 +156,7 @@ function Field({ id, label, req, state, P, full, children }) {
         s={state} set={P.set} onKeep={P.onKeep}
         onAccept={P.onAccept} onReject={P.onReject}
         onUseSuggestion={P.onUseSuggestion} onShowInCall={P.onShowInCall}
+        onResolve={P.onResolve}
       />
     </div>
   );
@@ -177,14 +192,14 @@ function Sel({ P, id, label, options, req }) {
 
 // The keys each section owns, so a whole section can be signed for at once.
 const SECTIONS = {
-  work: ["projectName", "category", "requestMode", "verifType", "requestDate"],
+  work: ["projectName", "category", "requestMode", "verifType", "requestDate", "vobRequired"],
   patient: ["lastName", "firstName", "dob", "today"],
   insurance: ["insName", "insPhone", "policyId", "groupId", "planType", "planName", "serviceType",
     "network", "networkInd", "coverage", "effDate", "termDate", "payerId", "hra"],
   financials: ["copay", "copayAmt", "covPct", "coins", "coinsAmt", "dedApply",
     "dedInd", "dedMet", "dedRem", "oop", "oopMet", "oopRem"],
   auth: ["visitLimit", "visitUsed", "initialTx", "authEval", "authTx", "authAfter", "referral",
-    "pcpRef", "authHow", "authWindow", "authNum", "authDates"],
+    "pcpRef", "authHow", "authWindow", "authNum", "authDates", "authStatus"],
   claims: ["tfl", "tflCorr", "claimAddr", "repName", "callRef", "username", "verifiedBy", "primary"],
   secondary: ["hasSec", "secName", "secPlan", "secPolicy", "secEff", "secDed", "secVisit", "secUsed"],
   summary: ["pat", "note"],
@@ -194,10 +209,10 @@ export default function VerificationForm(props) {
   const {
     form, set, states, onKeep, onBypass, onClearBypass, onGenerateNote,
     onAccept, onReject, onUseSuggestion, onShowInCall, onClearSection,
-    onSave, onSaveDraft, onPreviewPDF, onClear, onLoadSample,
-    projectNames = [],
+    onSave, onSaveDraft, onPreviewPDF, onClear, onLoadSample, onResolve,
+    projectNames = [], correcting = null,
   } = props;
-  const P = { form, set, states, onKeep, onBypass, onClearBypass, onAccept, onReject, onUseSuggestion, onShowInCall };
+  const P = { form, set, states, onKeep, onBypass, onClearBypass, onAccept, onReject, onUseSuggestion, onShowInCall, onResolve };
   const Head = ({ title, k }) => (
     <SectionHead title={title} keys={SECTIONS[k]} states={states} onAccept={onAccept} onClearSection={onClearSection} />
   );
@@ -221,6 +236,7 @@ export default function VerificationForm(props) {
           <Sel P={P} id="requestMode" label="Request mode" req options={REQUEST_MODES} />
           <Sel P={P} id="verifType" label="Verification type" options={VERIF_TYPES} />
           <Text P={P} id="requestDate" label="Request date" type="date" req />
+          <Sel P={P} id="vobRequired" label="VOB required" options={YES_NO} />
         </div>
         {!projectNames.length && (
           <p className="hint">No projects yet — add one under Admin before saving.</p>
@@ -284,6 +300,9 @@ export default function VerificationForm(props) {
           <Text P={P} id="authWindow" label="Auth request window from DOS" />
           <Text P={P} id="authNum" label="Authorization #" />
           <Text P={P} id="authDates" label="Auth coverage dates" />
+          {/* Left blank on a new record: the authorization is chased after the call,
+              and the Authorization queue is where it gets answered. */}
+          <Sel P={P} id="authStatus" label="Authorization outcome" options={AUTH_STATUSES} />
         </div>
 
         <Head title="Claims & call record" k="claims" />
@@ -332,11 +351,27 @@ export default function VerificationForm(props) {
 
       </div>
       <div className="actionbar">
-        <button className="btn btn-primary" onClick={onSave}>Save &amp; send to QA</button>
-        {/* A draft is saved work that has not been handed to anyone. It skips the
-            review gate on purpose — half a verification mid-call is the normal
-            state of this form, and losing it to a blocked save helps nobody. */}
-        <button className="btn btn-ghost" onClick={onSaveDraft}>Save as draft</button>
+        {correcting ? (
+          // Correcting a returned record is a different act from entering a new one:
+          // it puts the SAME record right rather than creating another version, so
+          // the button says so and the draft option is gone.
+          <>
+            <button className="btn btn-primary" onClick={onSave}>Resubmit to QA</button>
+            <span className="hint">
+              Correcting {correcting.openCount > 0
+                ? `— ${correcting.openCount} finding${correcting.openCount > 1 ? "s" : ""} still to mark fixed`
+                : "— all findings marked fixed"}
+            </span>
+          </>
+        ) : (
+          <>
+            <button className="btn btn-primary" onClick={onSave}>Save &amp; send on</button>
+            {/* A draft is saved work that has not been handed to anyone. It skips the
+                review gate on purpose — half a verification mid-call is the normal
+                state of this form, and losing it to a blocked save helps nobody. */}
+            <button className="btn btn-ghost" onClick={onSaveDraft}>Save as draft</button>
+          </>
+        )}
         <button className="btn btn-dark" onClick={onPreviewPDF}>Preview PDF only</button>
         <div className="spacer"></div>
         <button className="btn btn-ghost" onClick={onClear}>Clear form</button>

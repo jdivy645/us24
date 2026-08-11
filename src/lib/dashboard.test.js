@@ -113,3 +113,81 @@ test("insurance names are normalised so one payer is one row", () => {
   const d = buildDashboard([rec({ insName: "Aetna" }), rec({ insName: "AETNA" }), rec({ insName: " aetna " })]);
   assert.deepEqual(d.byInsurance, [{ label: "AETNA", count: 3 }]);
 });
+
+/* ---------------- the authorization pipeline ---------------- */
+
+test("only records that need an authorization are in the authorization pipeline", () => {
+  // A record with no authorization required is not "not yet answered" — it is not
+  // in this pipeline at all, and counting it as outstanding invents a backlog.
+  const d = buildDashboard([
+    rec({ _authRequired: "YES", authStatus: "APPROVED" }),
+    rec({ _authRequired: "YES", authStatus: "DENIED" }),
+    rec({ _authRequired: "YES", authStatus: "" }),
+    rec({ _authRequired: "NO", authStatus: "" }),
+    rec({ _authRequired: "NO", authStatus: "" }),
+  ]);
+  assert.equal(d.authRequired, 3);
+  const total = d.authPipeline.reduce((n, r) => n + r.count, 0);
+  assert.equal(total, 3);
+  assert.deepEqual(d.authPipeline.find((r) => r.label === "Not yet answered"), { label: "Not yet answered", count: 1 });
+  // A denial is an answer.
+  assert.equal(d.authAnswered, 2);
+});
+
+test("an empty pipeline is an empty list, not four zeroes", () => {
+  assert.deepEqual(buildDashboard([rec({ _authRequired: "NO" })]).authPipeline, []);
+});
+
+/* ---------------- quality score ---------------- */
+
+test("the quality score is the mean over checked records only", () => {
+  // P2 costs 10, so a record with one is 90. The unchecked record must not count as
+  // a perfect 100 — that would make the score rise every time QA falls behind.
+  const d = buildDashboard([
+    rec({ _errors: [{ priority: "P2" }] }),
+    rec({ _errors: [{ priority: "NONE" }] }),
+    rec({ _errors: [] }),
+  ]);
+  assert.equal(d.qualityScore, 95, "mean of 90 and 100");
+  assert.equal(d.checked, 2);
+});
+
+test("each operator is scored on their own checked work", () => {
+  const d = buildDashboard([
+    rec({ username: "SP", _errors: [{ priority: "P1" }] }),
+    rec({ username: "SP", _errors: [{ priority: "NONE" }] }),
+    rec({ username: "RK", _errors: [{ priority: "NONE" }] }),
+    rec({ username: "RK", _errors: [] }),
+  ]);
+  const sp = d.scoreByOperator.find((r) => r.label === "SP");
+  const rk = d.scoreByOperator.find((r) => r.label === "RK");
+  assert.equal(sp.count, 88, "mean of 75 and 100");
+  assert.equal(sp.records, 2);
+  assert.equal(rk.count, 100);
+  assert.equal(rk.records, 1, "the unchecked record is not scored");
+});
+
+test("nobody is scored before anything has been checked", () => {
+  const d = buildDashboard([rec({ _errors: [] })]);
+  assert.equal(d.qualityScore, null);
+  assert.deepEqual(d.scoreByOperator, []);
+});
+
+/* ---------------- categories and open work ---------------- */
+
+test("findings are counted by what kind of mistake they were", () => {
+  const d = buildDashboard([
+    rec({ _errors: [{ priority: "P2", category: "WRONG_DATA" }, { priority: "P3", category: "WRONG_DATA" }] }),
+    rec({ _errors: [{ priority: "P1", category: "MISSING" }] }),
+    rec({ _errors: [{ priority: "NONE", category: "OTHER" }] }),
+  ]);
+  assert.deepEqual(d.byCategory, [{ label: "Wrong value", count: 2 }, { label: "Missing information", count: 1 }]);
+});
+
+test("open findings are counted apart from findings", () => {
+  const d = buildDashboard([
+    rec({ _errors: [{ priority: "P2", resolvedAt: "" }, { priority: "P3", resolvedAt: "2026-08-11T10:00:00Z" }] }),
+  ]);
+  assert.equal(d.findings, 2, "a fixed finding still happened");
+  assert.equal(d.openFindings, 1, "…but only one is still outstanding");
+});

@@ -12,10 +12,16 @@ import { isStrict } from "./schema.js";
 // `autofill` is here for the reason the whole feature exists to guard against: if
 // a machine-read value could be saved without anyone looking, the form would agree
 // with the call by construction and the record would mean nothing.
-const BLOCKING = new Set(["required", "conflict", "contested", "autofill", "filedisagree"]);
+//
+// `flagged` is here for the same reason from the other end: a record QA sent back
+// must not be able to return to them with the flagged field untouched and
+// unacknowledged. It is deliberately the highest-priority state — when the checker
+// has said this specific box is wrong, that outranks anything the engine thinks.
+const BLOCKING = new Set(["required", "conflict", "contested", "autofill", "filedisagree", "flagged"]);
 
 export const KIND_LABEL = {
   ok: "matches the call",
+  flagged: "QA found a problem here",
   attested: "read from the call, checked by you",
   autofill: "read from the call — nobody has checked it",
   filedisagree: "our records and the call disagree",
@@ -40,9 +46,16 @@ const SOURCE_LABEL = {
 // suggestions/conflicts are the extraction layer's output, keyed by field:
 //   suggest[key]   — a proposal the policy layer declined to write
 //   conflict[key]  — our records say one thing, the call says another
-export function fieldStates(v, meta, result, comp, { suggest = {}, conflict = {} } = {}) {
+export function fieldStates(v, meta, result, comp, { suggest = {}, conflict = {}, errors = [] } = {}) {
   const byKey = new Map((result?.checks || []).map((c) => [c.key, c]));
   const required = new Set(comp?.requiredKeys || []);
+  // Open QA findings, by the field they were raised against. Findings about the
+  // record as a whole carry no fieldKey and belong on the review panel, not on a box.
+  const flagged = new Map();
+  for (const e of errors) {
+    if (!e.fieldKey || e.resolvedAt || e.priority === "NONE") continue;
+    flagged.set(e.fieldKey, e);
+  }
   const out = new Map();
 
   for (const key of F) {
@@ -52,7 +65,10 @@ export function fieldStates(v, meta, result, comp, { suggest = {}, conflict = {}
     const ex = extractOf(meta, key);
     let s;
 
-    if (isBypassed(meta, key)) {
+    if (flagged.has(key)) {
+      const e = flagged.get(key);
+      s = { kind: "flagged", finding: e, detail: e.note, priority: e.priority, raisedBy: e.by };
+    } else if (isBypassed(meta, key)) {
       const b = bypassOf(meta, key);
       s = { kind: "bypassed", detail: BYPASS_REASONS[b.reason] || b.reason, bypass: b };
     } else if (conflict[key]) {
@@ -111,8 +127,12 @@ export function fieldStates(v, meta, result, comp, { suggest = {}, conflict = {}
 export function reviewGroups(states) {
   const all = [...states.values()];
   const groups = [
+    // First, above everything the engine found: a person has already looked at this
+    // record and said what is wrong with it.
+    { id: "flagged", title: "Sent back by QA", hint: "Fix each one, then mark it done.",
+      items: all.filter((s) => s.kind === "flagged") },
     { id: "fix", title: "Must fix", hint: "The call disagrees, or the field is required and empty.",
-      items: all.filter((s) => s.blocking && s.kind !== "autofill") },
+      items: all.filter((s) => s.blocking && s.kind !== "autofill" && s.kind !== "flagged") },
     { id: "autofill", title: "Filled from the call — not yet checked",
       hint: "Nobody has compared these to what the rep actually said.",
       items: all.filter((s) => s.kind === "autofill") },

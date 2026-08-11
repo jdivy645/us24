@@ -372,3 +372,8 @@ mark.hl.auto{background:#EAF2FB;color:#2C6FB8;border-bottom:1.5px solid #2C6FB8}
 .req-chip.snotrequired{background:#FBEAE7;border-color:#F0C4BC;color:#C0392B;text-decoration:line-through}
 .req-chip:disabled{opacity:.45;cursor:not-allowed}
 .btn-xs{padding:3px 8px;font-size:10.5px}
+
+/* ---- QA sent this back: the one field state that came from a person ------- */
+.f-flagged input,.f-flagged select,.f-flagged textarea{border-color:#C0392B;background:#FFF7F6}
+.g-flagged{color:#C0392B}
+.dash-num .hint{font-weight:600}

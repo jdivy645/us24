@@ -3,12 +3,14 @@
 // Order is the export order and the iteration order everywhere else, so the
 // bookkeeping fields that say WHICH piece of work this is come first, then the
 // verification itself in the order the client's own template reads.
-export const F = ["projectName", "category", "requestMode", "verifType", "lastName", "firstName", "dob", "requestDate", "today", "insName", "insPhone", "policyId", "groupId", "planType", "planName", "serviceType", "network", "networkInd", "coverage", "effDate", "termDate", "payerId", "hra", "copay", "copayAmt", "covPct", "coins", "coinsAmt", "dedApply", "dedInd", "dedMet", "dedRem", "oop", "oopMet", "oopRem", "visitLimit", "visitUsed", "initialTx", "authEval", "authTx", "authAfter", "referral", "pcpRef", "authHow", "authWindow", "authNum", "authDates", "tfl", "tflCorr", "claimAddr", "repName", "callRef", "username", "verifiedBy", "primary", "hasSec", "secName", "secPlan", "secPolicy", "secEff", "secDed", "secVisit", "secUsed", "pat", "note"];
+export const F = ["projectName", "category", "requestMode", "verifType", "vobRequired", "lastName", "firstName", "dob", "requestDate", "today", "insName", "insPhone", "policyId", "groupId", "planType", "planName", "serviceType", "network", "networkInd", "coverage", "effDate", "termDate", "payerId", "hra", "copay", "copayAmt", "covPct", "coins", "coinsAmt", "dedApply", "dedInd", "dedMet", "dedRem", "oop", "oopMet", "oopRem", "visitLimit", "visitUsed", "initialTx", "authEval", "authTx", "authAfter", "referral", "pcpRef", "authHow", "authWindow", "authNum", "authDates", "authStatus", "tfl", "tflCorr", "claimAddr", "repName", "callRef", "username", "verifiedBy", "primary", "hasSec", "secName", "secPlan", "secPolicy", "secEff", "secDed", "secVisit", "secUsed", "pat", "note"];
 
 // Closed sets for the bookkeeping selects. Exported so the form, the import
 // mapper and the requirement config all offer the same words.
 export const REQUEST_MODES = ["CALL", "FAX", "WEBSITE"];
 export const VERIF_TYPES = ["INITIAL", "RE-VERIFICATION"];
+export const AUTH_STATUSES = ["PENDING", "APPROVED", "DENIED"];
+export const YES_NO = ["YES", "NO"];
 
 // Carried from one record to the next when the form is cleared. A day's work is
 // usually one project and one operator; retyping those on every patient is how a
@@ -50,6 +52,7 @@ export const initialForm = () => ({
   serviceType: "PT",
   requestMode: "CALL",
   verifType: "INITIAL",
+  vobRequired: "YES",
 });
 
 // `keep` carries the sticky bookkeeping fields forward between records in a batch.
@@ -58,6 +61,7 @@ export const clearedForm = (keep = {}) => ({
   today: todayISO(),
   requestMode: "CALL",
   verifType: "INITIAL",
+  vobRequired: "YES",
   ...Object.fromEntries(STICKY.map((k) => [k, keep[k] || ""]).filter(([, v]) => v)),
 });
 
@@ -88,10 +92,11 @@ export const sampleForm = () =>
 export const collect = (form) =>
   Object.fromEntries(F.map((k) => [k, (form[k] || "").trim()]));
 
-export const HEAD = { _savedAt: "Saved At", projectName: "Project", category: "Category", requestMode: "Request Mode", verifType: "Verification Type", lastName: "Last Name", firstName: "First Name", dob: "DOB", requestDate: "Request Date", today: "Verification Date", insName: "Insurance", insPhone: "Payer Phone", policyId: "Policy ID", groupId: "Group ID", planType: "Plan Type", planName: "Plan Name", serviceType: "Service Type", network: "Network Status (Group)", networkInd: "Network Status (Ind Prov)", coverage: "Coverage", effDate: "Effective Date", termDate: "Termination Date", payerId: "Payer ID", hra: "HCA/HRA", copay: "Co-pay", copayAmt: "Co-pay Amount", covPct: "Coverage %", coins: "Co-insurance", coinsAmt: "Co-insurance %", dedApply: "Deductible Applies", dedInd: "Deductible Individual", dedMet: "Deductible Met", dedRem: "Deductible Remaining", oop: "Out of Pocket", oopMet: "OOP Met", oopRem: "OOP Remaining", visitLimit: "Visit Limitation", visitUsed: "Visits Used", initialTx: "Initial Treatment Date", authEval: "Auth Initial Eval", authTx: "Auth Treatment", authAfter: "Auth After Visit #", referral: "Referral Required", pcpRef: "PCP Referral", authHow: "How To Obtain Auth", authWindow: "Auth Window From DOS", authNum: "Authorization #", authDates: "Auth Coverage Dates", tfl: "TFL Claims", tflCorr: "TFL Corrected", claimAddr: "Claim Mailing Address", repName: "Insurance Rep", callRef: "Call Reference", username: "Entered By", verifiedBy: "Verified By", primary: "Primary Payer", hasSec: "Secondary On File", secName: "Secondary Insurance", secPlan: "Secondary Plan", secPolicy: "Secondary Policy ID", secEff: "Secondary Effective Date", secDed: "Secondary Deductible", secVisit: "Secondary Visit Limit", secUsed: "Secondary Used Limit", pat: "PAT", note: "Additional Info", _file: "PDF File", _verdict: "Verdict", _matched: "Matched", _total: "Checked", _missing: "Missing Fields", _mismatch: "Contradicted Fields", _blankCount: "Blank Required", _required: "Required Count", _blank: "Blank Required Fields", _transcript: "Transcript", _audioFile: "Audio File", _source: "Evidence Source", _contested: "Rep Contradicted Self", _echoed: "Said By Us, Not Confirmed", _bypassed: "Bypassed Fields", _bypassReasons: "Bypass Reasons", _carrier: "Carrier-Sourced Fields", _attested: "Machine-Read, Human-Accepted", _autofillEdited: "Machine Value Corrected", _extractQuotes: "Call Quotes For Accepted Values", _typed: "Typed By Operator",
+export const HEAD = { _savedAt: "Saved At", projectName: "Project", category: "Category", requestMode: "Request Mode", verifType: "Verification Type", vobRequired: "VOB Required", lastName: "Last Name", firstName: "First Name", dob: "DOB", requestDate: "Request Date", today: "Verification Date", insName: "Insurance", insPhone: "Payer Phone", policyId: "Policy ID", groupId: "Group ID", planType: "Plan Type", planName: "Plan Name", serviceType: "Service Type", network: "Network Status (Group)", networkInd: "Network Status (Ind Prov)", coverage: "Coverage", effDate: "Effective Date", termDate: "Termination Date", payerId: "Payer ID", hra: "HCA/HRA", copay: "Co-pay", copayAmt: "Co-pay Amount", covPct: "Coverage %", coins: "Co-insurance", coinsAmt: "Co-insurance %", dedApply: "Deductible Applies", dedInd: "Deductible Individual", dedMet: "Deductible Met", dedRem: "Deductible Remaining", oop: "Out of Pocket", oopMet: "OOP Met", oopRem: "OOP Remaining", visitLimit: "Visit Limitation", visitUsed: "Visits Used", initialTx: "Initial Treatment Date", authEval: "Auth Initial Eval", authTx: "Auth Treatment", authAfter: "Auth After Visit #", referral: "Referral Required", pcpRef: "PCP Referral", authHow: "How To Obtain Auth", authWindow: "Auth Window From DOS", authNum: "Authorization #", authDates: "Auth Coverage Dates", authStatus: "Authorization Outcome", tfl: "TFL Claims", tflCorr: "TFL Corrected", claimAddr: "Claim Mailing Address", repName: "Insurance Rep", callRef: "Call Reference", username: "Entered By", verifiedBy: "Verified By", primary: "Primary Payer", hasSec: "Secondary On File", secName: "Secondary Insurance", secPlan: "Secondary Plan", secPolicy: "Secondary Policy ID", secEff: "Secondary Effective Date", secDed: "Secondary Deductible", secVisit: "Secondary Visit Limit", secUsed: "Secondary Used Limit", pat: "PAT", note: "Additional Info", _file: "PDF File", _verdict: "Verdict", _matched: "Matched", _total: "Checked", _missing: "Missing Fields", _mismatch: "Contradicted Fields", _blankCount: "Blank Required", _required: "Required Count", _blank: "Blank Required Fields", _transcript: "Transcript", _audioFile: "Audio File", _source: "Evidence Source", _contested: "Rep Contradicted Self", _echoed: "Said By Us, Not Confirmed", _bypassed: "Bypassed Fields", _bypassReasons: "Bypass Reasons", _carrier: "Carrier-Sourced Fields", _attested: "Machine-Read, Human-Accepted", _autofillEdited: "Machine Value Corrected", _extractQuotes: "Call Quotes For Accepted Values", _typed: "Typed By Operator",
   // Written after the record is saved, so they live on the version envelope rather
   // than in the form snapshot — the snapshot is what was verified against the call
   // and must not move afterwards.
   _status: "Status", _qaName: "QA By", _submittedAt: "Submitted At", _qaAt: "QA At",
-  _errorCount: "Error Count", _topPriority: "Highest Priority", _errors: "QA Errors",
+  _errorCount: "Error Count", _openCount: "Open Findings", _topPriority: "Highest Priority",
+  _score: "Quality Score", _correctedAt: "Corrected At", _errors: "QA Errors",
   _comments: "Comments", _authRequired: "Authorization Required" };

@@ -40,6 +40,9 @@ export default function NewVerification({ toast, currentUser, projects = [], han
   const [historyFor, setHistoryFor] = useState(null);
   const [decision, setDecision] = useState(null);
   const [cfg, setCfg] = useState({ add: [], exempt: [] });
+  // Set only when the operator is putting a returned record right. Carries the id of
+  // the version being corrected and the findings still open against it.
+  const [correcting, setCorrecting] = useState(null);
   const savingRef = useRef(false);
 
   // Typing over a value clears any provenance marker: it came from the operator
@@ -61,15 +64,40 @@ export default function NewVerification({ toast, currentUser, projects = [], han
   // where it left off. Runs once per handoff, then tells the shell it landed.
   useEffect(() => {
     if (!handoff) return;
+    const record = handoff.record || handoff;
     setForm((f) => {
       const n = { ...f };
-      F.forEach((k) => { if (handoff[k] !== undefined) n[k] = handoff[k]; });
+      F.forEach((k) => { if (record[k] !== undefined) n[k] = record[k]; });
       return n;
     });
-    setMeta(handoff._meta || {});
+    setMeta(record._meta || {});
+    // "correct" puts the same record right and resubmits it. "reverify" starts a new
+    // version from what this case last looked like. Same load, different write.
+    setCorrecting(handoff.mode === "correct"
+      ? { versionId: record._id, errors: record._errors || [], openCount: (record._errors || []).filter((e) => e.priority !== "NONE" && !e.resolvedAt).length }
+      : null);
     window.scrollTo({ top: 0, behavior: "smooth" });
     onHandoffDone?.();
   }, [handoff]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-read the findings after one is marked fixed, so the flag clears and the
+  // resubmit button unlocks without a round trip through the shell.
+  const refreshFindings = async () => {
+    if (!correcting) return;
+    const errors = await db.listErrors({ versionId: correcting.versionId });
+    setCorrecting((c) => (c ? { ...c, errors, openCount: errors.filter((e) => e.priority !== "NONE" && !e.resolvedAt).length } : c));
+  };
+
+  const handleResolveFinding = async (finding) => {
+    try {
+      await db.resolveError(finding.id, v.username || v.verifiedBy);
+      await refreshFindings();
+      await onSaved?.();
+      toast("Marked fixed");
+    } catch (e) {
+      toast("Could not mark that fixed: " + (e?.message || e), "bad");
+    }
+  };
 
   // The project's rule decides what "required" means for this record, so it has to
   // be in hand before completeness is computed. Re-read when either input changes;
@@ -120,8 +148,8 @@ export default function NewVerification({ toast, currentUser, projects = [], han
 
   const states = useMemo(
     () => fieldStates(collect(settled), meta, liveResult, comp,
-      { suggest: readCall?.suggest || {}, conflict: readCall?.conflict || {} }),
-    [settled, meta, liveResult, comp, readCall]);
+      { suggest: readCall?.suggest || {}, conflict: readCall?.conflict || {}, errors: correcting?.errors || [] }),
+    [settled, meta, liveResult, comp, readCall, correcting]);
 
   const validate = () => {
     const missing = ["lastName", "firstName", "insName"].filter((k) => !v[k]);
@@ -375,7 +403,54 @@ export default function NewVerification({ toast, currentUser, projects = [], han
   const handleSave = () => {
     if (!validate()) return;
     if (blockingCount(states) > 0) { setReviewing(true); return; }
+    if (correcting) { commitCorrection(); return; }
     commit(undefined, "submitted");
+  };
+
+  // Putting a returned record right. Writes over the same version rather than
+  // minting a new one — see db.saveCorrection for why that distinction is the whole
+  // reason the correction loop closes.
+  const commitCorrection = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setReviewing(false);
+    try {
+      const savedMeta = normalizeMeta(v, meta, v.username || v.verifiedBy);
+      const res = checkTranscript(v, transcript, savedMeta, { ranges: parsed?.ranges });
+      const compAtSave = checkCompleteness(v, savedMeta, cfg);
+      const out = await db.saveCorrection(correcting.versionId, {
+        form: v, meta: savedMeta, by: v.username || v.verifiedBy,
+        verify: {
+          verdict: res.verdict, matched: res.matched, total: res.total,
+          checks: res.checks.map((c) => ({ key: c.key, status: c.status })),
+        },
+        completeness: {
+          blank: compAtSave.blank.map((f) => f.label),
+          blankCount: compAtSave.blank.length,
+          required: compAtSave.required,
+        },
+      });
+      if (out.status === "refused") { toast(out.reason, "bad"); return; }
+      if (out.status === "not-found") { toast("That record is no longer here", "bad"); return; }
+
+      makePDF(v, savedMeta);
+      await onSaved?.();
+      setCorrecting(null);
+      setForm(clearedForm(v));
+      setMeta({});
+      setPrefill(null);
+      setReadCall(null);
+      setUpload(NO_UPLOAD);
+      autoRef.current = "";
+      fileRef.current = "";
+      toast(out.workflow.status === "auth_pending"
+        ? "Corrected — back to the authorization queue"
+        : "Corrected and resubmitted to QA");
+    } catch (e) {
+      toast("Could not resubmit: " + (e?.message || e), "bad");
+    } finally {
+      savingRef.current = false;
+    }
   };
 
   // A draft is a private save. It skips the review gate deliberately: the gate
@@ -479,7 +554,9 @@ export default function NewVerification({ toast, currentUser, projects = [], han
       };
       const base = (SAVED[res.verdict] || SAVED["NO TRANSCRIPT"])();
       const tail = [
-        status === "draft" ? "kept as a draft — not sent to QA" : "sent to QA",
+        status === "draft" ? "kept as a draft — not sent anywhere"
+          : out.workflow?.status === "auth_pending" ? "authorization required — sent to the authorization queue"
+            : "sent to QA",
         out.seq > 1 ? `version ${out.seq} of this case` : out.isNewCase ? "new case" : "",
         out.changed.length ? `changed: ${out.changed.map((k) => (HEAD[k] || k).toLowerCase()).join(", ")}` : "",
         compAtSave.incomplete ? `INCOMPLETE, ${compAtSave.blank.length} required field(s) blank` : "",
@@ -496,10 +573,15 @@ export default function NewVerification({ toast, currentUser, projects = [], han
   };
 
   const handleClear = () => {
-    if (!window.confirm("Clear all fields in this form?")) return;
+    if (!window.confirm(correcting
+      ? "Abandon this correction? The record stays returned and nothing is saved."
+      : "Clear all fields in this form?")) return;
     setForm(clearedForm(v));
     setMeta({});
-    toast("Form cleared");
+    // Leaving correction mode on would point the next save at a version whose form
+    // has just been emptied.
+    setCorrecting(null);
+    toast(correcting ? "Correction abandoned — the record is still returned" : "Form cleared");
   };
 
   const handleLoadSample = () => {
@@ -568,6 +650,8 @@ export default function NewVerification({ toast, currentUser, projects = [], han
               onPreviewPDF={handlePreviewPDF}
               onClear={handleClear}
               onLoadSample={handleLoadSample}
+              onResolve={handleResolveFinding}
+              correcting={correcting}
             />
           </div>
           <div className="preview-shell">
@@ -641,8 +725,9 @@ export default function NewVerification({ toast, currentUser, projects = [], han
           onAccept={handleAccept}
           onReject={handleRejectRead}
           onUseSuggestion={handleUseSuggestion}
+          onResolve={handleResolveFinding}
           onClose={() => setReviewing(false)}
-          onSaveAnyway={() => commit(undefined, "submitted")}
+          onSaveAnyway={() => (correcting ? commitCorrection() : commit(undefined, "submitted"))}
         />
       )}
     </>

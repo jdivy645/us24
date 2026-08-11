@@ -82,7 +82,10 @@ export default function Dashboard({ records, stats }) {
             <Tile label="Authorization required" value={d.authRequired}
               hint={d.total ? `${Math.round((d.authRequired / d.total) * 100)}% of records` : ""} />
             <Tile label="QA findings" value={d.findings} tone={d.byPriority.P1 ? "bad" : d.findings ? "warn" : "ok"}
-              hint={d.byPriority.P1 ? `${d.byPriority.P1} of them P1` : "no P1s"} />
+              hint={d.openFindings ? `${d.openFindings} still open` : d.byPriority.P1 ? `${d.byPriority.P1} of them P1` : "none open"} />
+            <Tile label="Quality score" value={d.qualityScore === null ? "—" : d.qualityScore}
+              tone={d.qualityScore === null ? undefined : d.qualityScore >= 90 ? "ok" : d.qualityScore >= 75 ? "warn" : "bad"}
+              hint={d.checked ? `mean of ${d.checked} checked` : "nothing checked yet"} />
             <Tile label="Clean rate" value={d.cleanRate === null ? "—" : `${d.cleanRate}%`}
               hint={d.checked ? `of ${d.checked} checked` : "nothing checked yet"} />
             <Tile label="Turnaround" value={d.medianTurnaround === null ? "—" : `${d.medianTurnaround}d`}
@@ -99,6 +102,13 @@ export default function Dashboard({ records, stats }) {
             <Bars title="By status" rows={statusRows} total={d.total} />
             <Bars title="By call verdict" rows={verdictRows} total={d.total} />
             <Bars title="QA findings by priority" rows={priorityRows} empty="Nothing logged yet" />
+            <Bars title="What kind of mistake" rows={d.byCategory} empty="Nothing logged yet" />
+            {/* Not a percentage of the total: only records that need an
+                authorization are in this pipeline at all. */}
+            <Bars title="Authorization pipeline" rows={d.authPipeline}
+              empty="No record has needed an authorization yet" />
+            <Bars title="Quality score by operator" rows={d.scoreByOperator}
+              empty="No record has been checked yet" />
             <Bars title="By request mode" rows={d.byRequestMode} total={d.total} />
           </div>
 

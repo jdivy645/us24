@@ -23,14 +23,16 @@ const COLUMNS = [
   { key: "dob", label: "DOB" },
   { key: "insName", label: "Insurance" },
   { key: "policyId", label: "Policy ID" },
-  { key: "serviceType", label: "Service" },
   { key: "_status", label: "Status" },
+  { key: "authStatus", label: "Auth" },
   { key: "_verdict", label: "Verdict" },
   { key: "_topPriority", label: "QA" },
   { key: "username", label: "By" },
 ];
 
-export default function LogTable({ records, sort, dir, onSort, onOpen, onDelete, onTranscript, onAudio, onHistory, onQa }) {
+const authClass = (s) => (s === "APPROVED" ? "ok" : s === "DENIED" ? "bad" : s === "PENDING" ? "warn" : "na");
+
+export default function LogTable({ records, sort, dir, onSort, onOpen, onDelete, onTranscript, onAudio, onHistory, onQa, qaLabel = "Review" }) {
   if (!records.length) {
     return (
       <div className="empty">
@@ -74,8 +76,14 @@ export default function LogTable({ records, sort, dir, onSort, onOpen, onDelete,
               <td>{dash(fmtDate(v.dob))}</td>
               <td>{dash(v.insName)}</td>
               <td>{dash(v.policyId)}</td>
-              <td>{dash(v.serviceType)}</td>
               <td><span className={"pill " + statusClass(v._status)}>{STATUS[v._status] || "—"}</span></td>
+              <td>
+                {/* Blank where no authorization was ever needed — an empty cell says
+                    "not applicable" more clearly than a word for it would. */}
+                {v._authRequired === "YES"
+                  ? <span className={"pill " + authClass(v.authStatus)}>{v.authStatus || "NOT SET"}</span>
+                  : <span className="hint">—</span>}
+              </td>
               <td>
                 <div className="pill-row">
                   <span className={"pill " + verdictClass(v, comp.incomplete)}>{v._verdict || "NO TRANSCRIPT"}</span>
@@ -87,14 +95,19 @@ export default function LogTable({ records, sort, dir, onSort, onOpen, onDelete,
               </td>
               <td>
                 {v._topPriority
-                  ? <span className={"pill " + priorityClass(v._topPriority)} title={PRIORITY_LABEL[v._topPriority]}>
-                    {v._topPriority}{v._errorCount > 1 ? ` ×${v._errorCount}` : ""}
+                  ? <span className="pill-row">
+                    <span className={"pill " + priorityClass(v._topPriority)} title={PRIORITY_LABEL[v._topPriority]}>
+                      {v._topPriority}{v._errorCount > 1 ? ` ×${v._errorCount}` : ""}
+                    </span>
+                    {/* An open finding is work outstanding; a resolved one is history. */}
+                    {v._openCount > 0 && <span className="pill warn" title="Findings not yet marked fixed">{v._openCount} open</span>}
+                    {v._score !== null && v._score !== undefined && <span className="hint">{v._score}</span>}
                   </span>
                   : <span className="hint">—</span>}
               </td>
               <td>{dash(v.username || v.verifiedBy)}{v._qaName ? <span className="hint"> · QA {v._qaName}</span> : null}</td>
               <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                {onQa && <><button className="btn btn-dark btn-sm" onClick={() => onQa(i)}>Review</button>{" "}</>}
+                {onQa && <><button className="btn btn-dark btn-sm" onClick={() => onQa(i)}>{qaLabel}</button>{" "}</>}
                 {(v._hasTranscript || v._transcript) && <><button className="btn btn-ghost btn-sm" onClick={() => onTranscript(i)}>Transcript</button>{" "}</>}
                 {v._versionCount > 1 && <><button className="btn btn-ghost btn-sm" onClick={() => onHistory(i)}>History</button>{" "}</>}
                 {v._audioFile && onAudio && <><button className="btn btn-ghost btn-sm" onClick={() => onAudio(i)}>Audio</button>{" "}</>}

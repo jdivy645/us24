@@ -95,7 +95,8 @@ const IDENTITY = new Set(VERIFY_FIELDS.filter((f) => f.identity).map((f) => f.ke
 // Our clock, our staff, our own scheduling, the work-tracking fields, and a
 // narrative generated from the other fields. Nothing here is the payer's to say.
 const INTERNAL = new Set(["today", "verifiedBy", "note", "pat",
-  "projectName", "category", "requestMode", "requestDate", "verifType", "username", "initialTx"]);
+  "projectName", "category", "requestMode", "requestDate", "verifType", "username", "initialTx",
+  "authStatus", "vobRequired"]);
 
 export const NEVER_EXTRACT = new Set([...PROSE, ...IDENTITY, ...INTERNAL]);
 
