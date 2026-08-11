@@ -47,7 +47,12 @@ export default function PreviewDoc({ v, meta }) {
                 <div className="vob-tag">{doc.tagline}</div>
               </div>
             )}
-          <div className="vob-pat">{doc.patBox}</div>
+          {/* Stacked, and stretched to a common width, so the preview and the PDF
+              show the same shape. */}
+          <div className="vob-boxes">
+            <div className="vob-pat">{doc.patBox}</div>
+            {doc.insBox && <div className="vob-pat">{doc.insBox}</div>}
+          </div>
         </header>
 
         <h1 className="vob-title">{doc.title}</h1>

@@ -121,7 +121,10 @@ select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns=
 .vob-mark span{color:var(--accent)}
 .vob-tag{font-size:.85em;font-weight:700;font-style:italic;color:var(--ink);
   border-top:1.5px solid var(--accent);border-bottom:1.5px solid var(--accent);display:inline-block;padding:1px 4px;margin-top:2px}
-.vob-pat{border:1.2px solid var(--ink);padding:4px 8px;font-weight:800;font-size:.95em;white-space:nowrap;flex:none}
+/* The PAT and INS boxes, stacked. `align-items:stretch` is what gives them a
+   common width in the preview — the PDF gets the same by measuring the wider. */
+.vob-boxes{display:flex;flex-direction:column;align-items:stretch;gap:4px;flex:none}
+.vob-pat{border:1.2px solid var(--ink);padding:4px 8px;font-weight:800;font-size:.95em;white-space:nowrap;flex:none;text-align:center}
 .vob-title{font-size:1.35em;font-weight:800;color:var(--brand);text-align:center;
   text-decoration:underline;text-underline-offset:2px;margin:0 0 8px}
 .vob-tbl{width:100%;border-collapse:collapse;table-layout:fixed}

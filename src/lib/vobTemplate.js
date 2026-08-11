@@ -49,6 +49,11 @@ export function derivePatResp(v) {
   return "PAT: $0.00 (100% COVERED)";
 }
 
+// The second boxed line, directly under the PAT box. Who the benefits belong to,
+// stated where a filing clerk looks first — the client's own shorthand for the
+// pair is "a PAT field, and then INS".
+export const deriveInsBox = (v) => `INS: ${up(v.insName) || "—"}`;
+
 // The "Additional Info" narrative. Formulaic in the client's own documents, so
 // it is generated — a typed note always overrides it (see noteText).
 export function deriveAdditionalInfo(v) {
@@ -239,6 +244,7 @@ export function buildVobDoc(v, meta = {}) {
     title: "Pre-Authorization & Benefits Determination",
     tagline: "Innovative Technology Driven",
     patBox: derivePatResp(v),
+    insBox: deriveInsBox(v),
     rows,
     footnotes: anyMarked ? ["† From carrier or portal data — not stated on the call."] : [],
     footer: "US24 Solutions — Confidential. Benefits quoted are not a guarantee of payment.",

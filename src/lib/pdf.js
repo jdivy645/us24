@@ -86,13 +86,21 @@ function drawHeader(doc, model, W) {
     drawWordmark(doc, cx);
   }
 
-  // Patient-responsibility box, top right.
+  // Patient responsibility, and the payer it is against, boxed at the top right.
+  //
+  // Two boxes rather than one line: they answer different questions and a filing
+  // clerk looks for them separately. Both are drawn to the width of the wider so
+  // the pair reads as a stack rather than as two ragged labels.
   doc.setFont("helvetica", "bold"); doc.setFontSize(8);
-  const bw = doc.getTextWidth(model.patBox) + 14;
+  const boxes = [model.patBox, model.insBox].filter(Boolean);
+  const bw = Math.max(...boxes.map((t) => doc.getTextWidth(t))) + 14;
   doc.setDrawColor(...INK); doc.setLineWidth(0.8);
-  doc.rect(M + W - bw, 24, bw, 18);
   doc.setTextColor(...INK);
-  doc.text(model.patBox, M + W - bw / 2, 36, { align: "center" });
+  boxes.forEach((text, i) => {
+    const y = 24 + i * 22;
+    doc.rect(M + W - bw, y, bw, 18);
+    doc.text(text, M + W - bw / 2, y + 12, { align: "center" });
+  });
 
   // Title, centred and underlined.
   doc.setFontSize(13); doc.setTextColor(...NAVY);

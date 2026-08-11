@@ -89,6 +89,21 @@ test("row order matches the client template exactly", () => {
   ]);
 });
 
+test("the insurance name is boxed under the patient-responsibility box", () => {
+  // Two boxes, not one line: what the patient owes and who owes it to are
+  // different questions, and the client asks for them as "a PAT field, and then
+  // INS".
+  const doc = buildVobDoc({ ...ASH, insName: "Cigna ASH" }, {});
+  assert.match(doc.patBox, /^PAT: /);
+  assert.equal(doc.insBox, "INS: CIGNA ASH");
+});
+
+test("the insurance box keeps its shape on a record with no payer yet", () => {
+  // A draft still has to render. An empty bordered box reads as broken, a dash
+  // reads as not filled in.
+  assert.equal(buildVobDoc({ ...ASH, insName: "" }, {}).insBox, "INS: —");
+});
+
 test("the project block carries what the record is filed under", () => {
   const rows = buildVobDoc({ ...ASH, projectName: "EC Marvel", category: "VOB", requestMode: "FAX", requestDate: "2026-08-03" }, {}).rows;
   const text = JSON.stringify(rows.find((r) => r.id === "project"));
