@@ -109,33 +109,39 @@ select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns=
 .preview-shell{position:sticky;top:140px}
 /* The VOB document — the on-screen twin of lib/pdf.js. Both render the model
    from lib/vobTemplate.js, so the two layouts cannot drift apart. */
+/* Every measurement below is in `em` so that it scales with --vob-scale along with
+   the type. It used to be pixels, which meant the shrink-to-fit could only ever
+   reduce the text: sixteen table rows carry 8px of vertical cell padding each, and
+   128px that never moves is 128px the ladder cannot recover. The document then
+   overflowed and `overflow:hidden` threw the bottom rows away in silence.
+   Proportional spacing is also what makes PreviewDoc's estimate exact. */
 .vob{
   background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
-  padding:16px 18px 18px;aspect-ratio:8.5/11;overflow:hidden;
+  padding:1.8em 2em 2em;aspect-ratio:8.5/11;overflow:auto;
   font-size:calc(9px * var(--vob-scale,1));line-height:1.42;color:var(--ink);
 }
-.vob-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+.vob-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1.35em;margin-bottom:1.1em}
 .vob-logo{text-align:center;flex:1}
-.vob-logo-img{max-width:230px;height:auto;flex:1}
+.vob-logo-img{max-width:25.5em;height:auto;flex:1}
 .vob-mark{font-size:1.9em;font-weight:800;letter-spacing:-.02em;color:var(--brand);line-height:1.1}
 .vob-mark span{color:var(--accent)}
 .vob-tag{font-size:.85em;font-weight:700;font-style:italic;color:var(--ink);
   border-top:1.5px solid var(--accent);border-bottom:1.5px solid var(--accent);display:inline-block;padding:1px 4px;margin-top:2px}
 /* The PAT and INS boxes, stacked. `align-items:stretch` is what gives them a
    common width in the preview — the PDF gets the same by measuring the wider. */
-.vob-boxes{display:flex;flex-direction:column;align-items:stretch;gap:4px;flex:none}
-.vob-pat{border:1.2px solid var(--ink);padding:4px 8px;font-weight:800;font-size:.95em;white-space:nowrap;flex:none;text-align:center}
+.vob-boxes{display:flex;flex-direction:column;align-items:stretch;gap:.45em;flex:none}
+.vob-pat{border:1.2px solid var(--ink);padding:.45em .9em;font-weight:800;font-size:.95em;white-space:nowrap;flex:none;text-align:center}
 .vob-title{font-size:1.35em;font-weight:800;color:var(--brand);text-align:center;
-  text-decoration:underline;text-underline-offset:2px;margin:0 0 8px}
+  text-decoration:underline;text-underline-offset:2px;margin:0 0 .6em}
 .vob-tbl{width:100%;border-collapse:collapse;table-layout:fixed}
-.vob-tbl td{width:50%;border:.8px solid #96A8C0;padding:4px 6px;vertical-align:top;word-break:break-word}
+.vob-tbl td{width:50%;border:.8px solid #96A8C0;padding:.45em .68em;vertical-align:top;word-break:break-word}
 .vob-tbl tr.shade td{background:#DFE9F4}
 .vob-l{margin:0}
 .vob-l b{font-weight:800}
 .vob-l.muted span{color:var(--ink-soft);font-style:italic}
 .vob-gap{height:.7em}
-.vob-note{margin-top:6px;font-size:.85em;color:var(--ink-soft)}
-.vob-foot{margin-top:8px;padding-top:5px;border-top:1px solid var(--line);font-size:.85em;color:var(--ink-soft)}
+.vob-note{margin-top:.75em;font-size:.85em;color:var(--ink-soft)}
+.vob-foot{margin-top:1em;padding-top:.6em;border-top:1px solid var(--line);font-size:.85em;color:var(--ink-soft)}
 /* ---------- Table ---------- */
 .tbl-wrap{overflow-x:auto}
 table.data{width:100%;border-collapse:collapse;font-size:12.5px}

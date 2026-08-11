@@ -6,7 +6,10 @@ import { LOGO_PNG } from "../assets/logo.js";
 // so this file never names a form field — adding a row is a one-line edit in
 // vobTemplate.js and both outputs follow.
 
-const SCALES = [1, 0.94, 0.88, 0.82];
+// Matched to the range lib/pdf.js can reach — its ladder runs 8.0pt down to 6.5pt
+// type with the padding tightening alongside, which is a little over 30% of height.
+// Four steps of font-size alone could not follow it.
+const SCALES = [1, 0.94, 0.88, 0.82, 0.76, 0.70];
 
 const Line = ({ line }) => {
   if (line.gap) return <div className="vob-gap" />;
@@ -27,12 +30,19 @@ export default function PreviewDoc({ v, meta }) {
   const [step, setStep] = useState(0);
 
   // Mirror the PDF's shrink-to-one-page behaviour.
+  //
+  // Every measurement in .vob is in `em`, so the rendered height is proportional to
+  // the scale and this estimate is exact. It was not, while the cell padding was
+  // fixed pixels: the walk down the ladder assumed the whole document shrank,
+  // stopped one step early, and the page clipped what was left.
   useLayoutEffect(() => {
     const box = boxRef.current, inner = innerRef.current;
-    if (!box || !inner) return;
-    let i = 0;
-    while (i < SCALES.length - 1 && inner.scrollHeight * (SCALES[i] / SCALES[step]) > box.clientHeight) i++;
-    if (i !== step) setStep(i);
+    if (!box || !inner || !inner.scrollHeight) return;
+    // The largest scale whose projected height still fits.
+    const fits = (box.clientHeight * SCALES[step]) / inner.scrollHeight;
+    const i = SCALES.findIndex((s) => s <= fits);
+    const next = i === -1 ? SCALES.length - 1 : i;
+    if (next !== step) setStep(next);
   });
 
   return (

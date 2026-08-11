@@ -125,6 +125,30 @@ function drawWordmark(doc, cx) {
   doc.line(cx - total / 2, 57, cx + total / 2, 57);
 }
 
+// Does this record fit, and by how much?
+//
+// Exported because the thing that guarded it did not work. The old test asserted
+// `getNumberOfPages() === 1`, which is true of every document this file has ever
+// produced — nothing here calls addPage(). Content that does not fit is simply
+// drawn past the bottom edge and disappears. Three rounds of new rows went in
+// under a green test that could not fail.
+export function measurePDF(v, meta = {}) {
+  const model = buildVobDoc(v, meta);
+  const doc = new jsPDF({ unit: "pt", format: "letter" });
+  const PH = doc.internal.pageSize.getHeight();
+  const W = doc.internal.pageSize.getWidth() - M * 2;
+  const avail = PH - HEAD_H - FOOT_H - M;
+  const heights = SCALES.map((s) => bodyHeight(doc, model, W, s));
+  const i = heights.findIndex((h) => h <= avail);
+  const used = i === -1 ? SCALES.length - 1 : i;
+  return {
+    avail, heights, scale: used, fits: i !== -1,
+    height: heights[used],
+    overflow: Math.max(0, heights[used] - avail),
+    rows: model.rows.length,
+  };
+}
+
 // Builds the document without saving it — the testable half.
 export function buildPDF(v, meta = {}) {
   const model = buildVobDoc(v, meta);
