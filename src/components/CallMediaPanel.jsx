@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 const TRANSCRIPT_ACCEPT = ".txt,.text,.log,.vtt,.srt,text/plain,text/vtt";
 
 const ROLE_LABEL = { rep: "insurance rep", agent: "our side", ivr: "phone menu", unknown: "unidentified" };
-const FORMAT_LABEL = { ringcentral: "RingCentral export", vtt: "captions (VTT/SRT)", labelled: "speaker-labelled", plain: "plain text" };
+const FORMAT_LABEL = { ringcentral: "RingCentral export", vtt: "captions (VTT/SRT)", teams: "Teams transcript", labelled: "speaker-labelled", plain: "plain text" };
 
 import { HEAD } from "../data/fields.js";
 
@@ -22,6 +22,7 @@ const jumpTo = (key) => {
 export default function CallMediaPanel({
   upload, parsed, queue, onTranscriptFiles, onPaste, onClearTranscript, onDownloadText,
   onPickQueued, onSetRole, attributed, readCall, onReadCall, onClearRead, onUseSuggestion,
+  pendingCount = 0, onAcceptAll,
 }) {
   const boxRef = useRef(null);
   const [pasting, setPasting] = useState(false);
@@ -121,6 +122,18 @@ export default function CallMediaPanel({
               <span className="ps-v">{FORMAT_LABEL[parsed.format] || parsed.format}</span>
               {parsed.turns.length > 1 && <span className="hint">{parsed.turns.length} turns</span>}
             </div>
+            {/* Shown even with nothing to correct. Telling an operator their
+                transcript has no payer in it and then withholding the control that
+                would fix it is the bug this panel already fixed once, for the
+                colon formats. */}
+            {parsed.speakers.length === 0 && (
+              <div className="ps-row">
+                <span className="ps-k">Speakers</span>
+                <span className="hint">
+                  None found — this file has no speaker labels. Re-export it with them if you can.
+                </span>
+              </div>
+            )}
             {parsed.speakers.length > 0 && (
               <div className="ps-row">
                 <span className="ps-k">Speakers</span>
@@ -149,6 +162,16 @@ export default function CallMediaPanel({
                     {readCall.counts.suggest ? ` · ${readCall.counts.suggest} to consider` : ""}
                     {readCall.counts.contested + readCall.counts.blocked ? ` · ${readCall.counts.contested + readCall.counts.blocked} left for you` : ""}
                   </span>
+                  {/* One click for everything the call supports, because a good
+                      transcript now fills thirty fields and signing for each in
+                      turn is how a checklist becomes a reflex. The money and
+                      authorization values are deliberately not in here — they stay
+                      one at a time, where a wrong one costs a denial. */}
+                  {pendingCount > 0 && (
+                    <button className="btn btn-dark btn-sm" onClick={onAcceptAll}>
+                      Accept all {pendingCount}
+                    </button>
+                  )}
                   <button className="btn btn-ghost btn-sm" onClick={onReadCall}>Read again</button>
                   <button className="btn btn-ghost btn-sm" onClick={onClearRead}>Clear what it wrote</button>
                 </>

@@ -973,6 +973,15 @@ function anchorSites(prep, ranges) {
     const asked = sitesByTurn.get(q);
     const keys = new Set(asked.flatMap((s) => [...s.keys]));
     const topics = new Set([...keys].map((k) => (ANCHORS[k] && ANCHORS[k].g) || k));
+    // One TOPIC, not one field. "What is the individual deductible and individual
+    // out of pocket?" names two, and the client's own call answers it with a bare
+    // "$3,000." — which belongs to one of them and there is no way to know which.
+    // Filling either would be a coin toss wearing a tick. But "what is the out of
+    // pocket individual?" names one topic covering three fields, and the qualifier
+    // rules can tell the maximum from the met from the remaining.
+    //
+    // Tried and reverted: allowing two topics. It fills the out-of-pocket maximum
+    // into the remaining balance on the reference call.
     if (topics.size !== 1) continue;
 
     // And the answer has to be a simple one. The projected anchor sits at the
@@ -980,6 +989,11 @@ function anchorSites(prep, ranges) {
     // first one wins — which on a reply like "6, uh 6,500 and remaining is
     // 5,473.76" means a stutter becomes the out-of-pocket maximum. One candidate
     // in the turn, or the reply carries its own anchors and needs no help.
+    //
+    // Tried and reverted: allowing several, with the claim restricted to whichever
+    // field's qualifier sat nearest the figure. On the reference call it bought
+    // one extra field and filled it wrong — the out-of-pocket maximum landed in
+    // the remaining balance. A blank beats that.
     const fam = FAMILY[MTYPE.get([...keys][0])];
     const { nums, runs, dates } = scanCands(prep);
     const pool = fam === "id" ? runs : fam === "date" ? dates : nums;
@@ -1088,6 +1102,11 @@ function candidatesFor(prep, key, m, formNorm) {
     out.push({ ...n, norm: n.val * DUR[u], cue: true });
   }
   else if (m === "id" || m === "phone") for (const r of runs) {
+    // A member ID is not an amount of money. "526.24" is one numeric token, so it
+    // joins a digit run with its decimal point intact — and on the client's own
+    // call the deductible remaining was proposed as the member ID because of it.
+    // Nothing that carries a decimal point is an identifier.
+    if (/\D/.test(r.digits)) continue;
     if (r.digits.length < 4) continue;
     // A phone is ten digits by definition — that is a type rule, not a form value.
     if (m === "phone") { if (r.digits.length !== 10) continue; }
@@ -1136,7 +1155,20 @@ function scoreCandidates(prep, f, value, exclude, ranges) {
   // Only the rep can contradict, and only the rep can supply a value. Our own
   // agent misreading a figure back ("you told me 18 days") must never be quoted as
   // what the call said, nor written into the form.
-  if (ranges) cands = cands.filter((c) => roleAt(ranges, c.s) !== "agent");
+  //
+  // The date of birth is the exception, for the reason VERIFY_FIELDS already
+  // gives: the call flows the other way for the identity fields. Our agent reads
+  // the DOB out and the rep looks the member up, so the agent's voice is where it
+  // lives — and filtering it out left the DOB unreadable on every real call.
+  //
+  // A date can be this exception because it has a shape nothing else shares. The
+  // member ID cannot: tried, and on the client's own call a bare "3,000" beside
+  // the word "member" was proposed as the member ID. An identifier is a digit run
+  // and so is a dollar amount, so the rep saying it is the only evidence that
+  // separates them. Grading is untouched either way; this decides only where a
+  // value may be READ from.
+  const voiceExempt = f.identity && f.type === "date";
+  if (ranges && !voiceExempt) cands = cands.filter((c) => roleAt(ranges, c.s) !== "agent");
   if (!cands.length) return none("no-candidate");
   const own = OWN_Q.get(f.key) || new Set(), sib = SIB_Q.get(f.key) || new Set();
   const [fwd, back] = WIN[m] || [10, 4];

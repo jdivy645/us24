@@ -64,7 +64,9 @@ test("COVERAGE the deductible and out-of-pocket trios both fill", () => {
 test("COVERAGE a real, badly transcribed call fills less — but nothing wrong", () => {
   const { right, wrong } = grade(ASH, TRUTH);
   assert.deepEqual(wrong, [], "a wrong value is worse than a blank one");
-  assert.ok(right.length >= 10, `expected at least 10, got ${right.length}`);
+  // Raised from 10 when the date of birth became readable. The floor is meant to
+  // ratchet: it equalled the measured output for two rounds, which pins nothing.
+  assert.ok(right.length >= 11, `expected at least 11, got ${right.length}`);
 });
 
 test("COVERAGE the messy call still catches all four data-entry defects", () => {

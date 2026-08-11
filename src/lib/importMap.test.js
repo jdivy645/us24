@@ -94,9 +94,13 @@ test("phones are normalised, and left alone when they are not phones", () => {
   assert.equal(coercePhone("ext 4412"), "ext 4412");
 });
 
-test("a single name column splits in either order, flagging the guess", () => {
+test("a single name column reads as Last First, flagging the guess", () => {
+  // A comma is authoritative and says American order outright.
   assert.deepEqual(splitName("MOUSE, MICKIE"), { lastName: "MOUSE", firstName: "MICKIE", guessed: false });
-  assert.deepEqual(splitName("Mickie Mouse"), { lastName: "MOUSE", firstName: "MICKIE", guessed: true });
+  // Without one there is nothing in the data to order by, so the same convention
+  // is assumed — these sheets are written surname first — and the row is flagged
+  // so the preview can show it before anyone saves a patient named backwards.
+  assert.deepEqual(splitName("MOUSE MICKIE"), { lastName: "MOUSE", firstName: "MICKIE", guessed: true });
 });
 
 /* ------------------------------------------------------------------ rows */

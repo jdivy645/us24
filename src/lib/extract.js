@@ -90,6 +90,18 @@ const PROSE = new Set(Object.keys(ANCHORS).filter((k) => ANCHORS[k].m === "none"
 // patient and carrier records. Extracting them retypes what is there at best, and
 // at worst adopts a different member's details because the rep pulled up the wrong
 // record, silently, into the fields the whole document identifies a person by.
+// `identity: true` marks the fields the PROVIDER supplies, and it still governs how
+// they are GRADED — our own agent's voice confirms them, and a form naming someone
+// the call never named still fails. It no longer governs whether they can be READ.
+//
+// The original reasoning assumed the patient was already on file and the operator
+// was verifying, not typing. In this team's actual workflow a transcript often
+// arrives with no patient record behind it, and refusing to read the first five
+// boxes on the form is most of why the app looked like it was doing nothing.
+//
+// Safety comes from a different place instead: nothing extracted saves without a
+// human accepting it (`autofill` is a blocking field state), so a member ID read
+// off the wrong record is visible before it is committed rather than after.
 const IDENTITY = new Set(VERIFY_FIELDS.filter((f) => f.identity).map((f) => f.key));
 
 // Our clock, our staff, our own scheduling, the work-tracking fields, and a
@@ -98,17 +110,27 @@ const INTERNAL = new Set(["today", "verifiedBy", "note", "pat",
   "projectName", "category", "requestMode", "requestDate", "verifType", "username", "initialTx",
   "authStatus", "vobRequired"]);
 
-export const NEVER_EXTRACT = new Set([...PROSE, ...IDENTITY, ...INTERNAL]);
+export const NEVER_EXTRACT = new Set([...PROSE, ...INTERNAL]);
 
 // serviceType is prose by measurement — there is no number or date to anchor — but
 // it is the one prose field drawn from a closed set of four disciplines, so it can
 // be read off the words directly rather than guessed at. See serviceTypeFrom.
 NEVER_EXTRACT.delete("serviceType");
 
+// The names are prose too, and stay unread as free prose — but a name the speaker
+// LABELLED ("the last name is Yusuff") is a field and its value said out loud, and
+// namesFrom() reads that shape and only that shape.
+NEVER_EXTRACT.delete("lastName");
+NEVER_EXTRACT.delete("firstName");
+
+// PROSE is checked before IDENTITY now that identity no longer refuses on its own:
+// a name is unread because speech mangles it beyond recovery, not because the
+// provider supplied it, and the reason shown to the operator should say so.
 const policyReason = (k) =>
   INTERNAL.has(k) ? "internal-bookkeeping"
-    : IDENTITY.has(k) ? "identity-supplied-by-provider"
-      : "prose-not-reversible";
+    : PROSE.has(k) ? "prose-not-reversible"
+      : IDENTITY.has(k) ? "identity-supplied-by-provider"
+        : "prose-not-reversible";
 
 // Who claims a shared number first. A qualified group member ("deductible
 // REMAINING") carries named evidence of its own and must go before the base field
@@ -303,6 +325,93 @@ function serviceTypeFrom(prep, ranges) {
   return null;
 }
 
+/* ------------------------------------------------------------------ names */
+
+// Names are prose, and prose is not reversible — a presence matcher can tell you
+// whether a name you already hold was spoken, never what the name was. That stands.
+//
+// What is reversible is a name the speaker LABELLED. "The last name is Yusuff" and
+// "first name Tajudeen" are not prose; they are a field and its value, said out
+// loud. So this reads exactly that shape and nothing else: no guessing at a
+// capitalised word, no taking the noun after "patient", no inference. If the call
+// did not say which part of the name it was giving, nothing is read.
+//
+// American order — last name then first — is what these calls use and what the
+// client's forms expect, so a bare "Yusuff, Tajudeen" beside a name label is read
+// in that order. Without the comma there is nothing to order by and it is left.
+// `["1", "name"]` is not a typo. numberize() runs before any of this and turns
+// spoken ordinals into digits, so by the time a phrase is matched "first name" has
+// become "1 name" — which is why the first name never read while the last name did.
+const NAME_LABELS = [
+  { key: "lastName", phrases: [["last", "name"], ["surname"], ["family", "name"]] },
+  { key: "firstName", phrases: [["1", "name"], ["first", "name"], ["given", "name"]] },
+];
+
+// The only words allowed between a label and its value. Anything else means the
+// label was not introducing a name — "what is the surname on the policy?" is a
+// question, and walking past "on the" to reach "policy" is how a reader invents a
+// patient called POLICY.
+const NAME_LINK = new Set(["is", "was", "are", "s", "it", "the", "spelled", "spelling", "here"]);
+
+// Words that can sit where a name would and are not one.
+//
+// A stop list is the right tool here and not a lazy one: names are content words,
+// and everything that can follow "the last name" without being a name is a
+// function word or call-desk vocabulary. It is a closed-ish class, unlike names.
+// "I will need the last name before I can look it up" produced a patient called
+// BEFORE until prepositions went in.
+const NAME_STOP = new Set([
+  // function words
+  "on", "in", "at", "of", "for", "to", "by", "with", "and", "or", "a", "an", "that", "this",
+  "before", "after", "when", "while", "then", "than", "if", "as", "but", "from", "up", "out",
+  "over", "under", "again", "just", "only", "also", "not", "too", "very", "back", "down",
+  "what", "who", "which", "why", "how", "where", "can", "could", "would", "should", "will",
+  "let", "me", "my", "your", "his", "her", "their", "our", "them", "him", "she", "he", "they",
+  "there", "here", "we", "you", "i", "it", "be", "been", "being", "am", "get", "got", "give",
+  "have", "has", "had", "do", "does", "did", "say", "said", "see", "look", "need", "want",
+  "yes", "no", "yeah", "yep", "nope", "sure", "okay", "ok", "uh", "um", "hmm", "so", "well",
+  "please", "thanks", "thank", "sorry", "hold", "one", "moment", "second", "minute",
+  // call-desk vocabulary
+  "policy", "record", "file", "plan", "account", "number", "member", "patient", "subscriber",
+  "insured", "today", "system", "side", "screen", "call", "line", "date", "birth", "dob",
+  "insurance", "carrier", "payer", "group", "benefits", "coverage", "eligibility", "claim",
+]);
+
+const isNameToken = (tk) =>
+  !!tk && !tk.num && /^[a-z]{2,}$/.test(tk.t) && !NAME_STOP.has(tk.t) && !NAME_LINK.has(tk.t);
+
+// The value immediately after a label, past at most two linking words. Anything
+// further away is not this label's value.
+function nameAfter(prep, i, len) {
+  let k = i + len, hops = 0;
+  while (k < prep.toks.length && hops < 2 && NAME_LINK.has(prep.toks[k].t)) { k++; hops++; }
+  const tk = prep.toks[k];
+  if (!isNameToken(tk)) return null;
+  return { value: tk.t.toUpperCase(), span: { start: tk.start, end: tk.end } };
+}
+
+export function namesFrom(prep, ranges) {
+  const out = {};
+  for (const { key, phrases } of NAME_LABELS) {
+    for (const phrase of phrases) {
+      for (const h of findAll(prep, phrase)) {
+        // Either voice may label a name: our agent reads the patient out and the
+        // rep reads it back off the record. Both are the name being stated.
+        const got = nameAfter(prep, h.i, phrase.length);
+        if (!got) continue;
+        out[key] = {
+          ...got,
+          by: !ranges || saidByRep(ranges, [got.span]) ? "rep" : "agent",
+          why: `said after "${phrase.join(" ")}"`,
+        };
+        break;
+      }
+      if (out[key]) break;
+    }
+  }
+  return out;
+}
+
 /* ---------------------------------------------------------------- derived */
 
 // If the rep says the deductible is $3,000 and $2,473.76 remains, then $526.24 has
@@ -427,6 +536,17 @@ export function extractFromTranscript(prep, { ranges = null, exclude = [] } = {}
         svc.by === "rep" ? "The rep named this discipline."
           : "This is the discipline the call was placed about.");
     } else note("serviceType", "topic-never-came-up");
+  }
+
+  // ---- 2c. names, but only where the call labelled them ---------------------
+  {
+    const names = namesFrom(prep, ranges);
+    for (const key of ["lastName", "firstName"]) {
+      if (names[key]) {
+        values[key] = propose(key, names[key].value, null, names[key].span,
+          `The ${names[key].by === "rep" ? "rep" : "call"} gave this as the ${key === "lastName" ? "last" : "first"} name.`);
+      } else note(key, "topic-never-named");
+    }
   }
 
   // ---- 3. numbers, dates, IDs ---------------------------------------------

@@ -219,6 +219,23 @@ export default function NewVerification({ toast, currentUser, projects = [], han
     toast(`Accepted ${keys.length} value(s) read from the call`);
   };
 
+  // Everything machine-read and still unsigned, minus the strict fields. Money and
+  // authorization values are excluded on purpose: they are the ones a wrong value
+  // costs a denial on, and the existing per-field sign-off is what stops thirty
+  // clicks becoming a reflex that signs for them too.
+  const bulkPending = useMemo(
+    () => [...states.values()].filter((s) => s.kind === "autofill" && !s.strict).map((s) => s.key),
+    [states]);
+
+  const handleAcceptAll = () => {
+    if (!bulkPending.length) return;
+    setMeta((m) => acceptFields(m, bulkPending, v.username || v.verifiedBy));
+    const strict = [...states.values()].filter((s) => s.kind === "autofill" && s.strict).length;
+    toast(strict
+      ? `Accepted ${bulkPending.length} — ${strict} money or authorization value${strict > 1 ? "s" : ""} still to check one at a time`
+      : `Accepted all ${bulkPending.length} values read from the call`);
+  };
+
   const handleRejectRead = (k) => {
     const out = rejectField(form, meta, k, v.verifiedBy);
     setForm(out.form);
@@ -345,7 +362,19 @@ export default function NewVerification({ toast, currentUser, projects = [], han
   // Several files at once: the first is verified now, the rest wait. A manager can
   // drop a day's exports and work through them without going back to the folder.
   const handleTranscriptFiles = async (files) => {
-    const read = await Promise.all(files.map(async (f) => ({ name: f.name, text: (await f.text()).trim() })));
+    // Word and PDF are what Teams and most portals offer first, and reading either
+    // as text produces binary rubbish. "That transcript file is empty" sent people
+    // looking for a problem with the call; naming the format and the way out is the
+    // difference between a dead end and a next step.
+    const BINARY = /\.(docx?|pdf|rtf|odt|xlsx?)$/i;
+    const unreadable = files.filter((f) => BINARY.test(f.name));
+    if (unreadable.length) {
+      toast(`${unreadable.length === 1 ? unreadable[0].name : `${unreadable.length} files`} cannot be read as text — in Teams choose the .vtt download, or open the document and paste the text here`, "bad");
+    }
+    const readable = files.filter((f) => !BINARY.test(f.name));
+    if (!readable.length) return;
+
+    const read = await Promise.all(readable.map(async (f) => ({ name: f.name, text: (await f.text()).trim() })));
     const usable = read.filter((r) => r.text);
     const empty = read.length - usable.length;
     if (!usable.length) { toast("That transcript file is empty", "bad"); return; }
@@ -618,6 +647,8 @@ export default function NewVerification({ toast, currentUser, projects = [], han
               onReadCall={() => readAndFill()}
               onClearRead={handleClearAllRead}
               onUseSuggestion={handleUseSuggestion}
+              pendingCount={bulkPending.length}
+              onAcceptAll={handleAcceptAll}
             />
             <PrefillBar
               prefill={prefill}

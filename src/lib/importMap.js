@@ -11,6 +11,10 @@ const norm = (s) => String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]/
 export const HEADER_SYNONYMS = {
   lastName: ["lastname", "last", "patientlastname", "lname", "surname", "memberlastname"],
   firstName: ["firstname", "first", "patientfirstname", "fname", "givenname"],
+  // A single column holding the whole name. Without this a "Patient Name" sheet
+  // imported every row with a blank name, because nothing matched it and nothing
+  // called splitName().
+  patientName: ["patientname", "membername", "name", "fullname", "patient", "beneficiaryname"],
   dob: ["dob", "dateofbirth", "birthdate", "birthday", "bdate"],
   insName: ["insurance", "insurancename", "payer", "payername", "carrier", "primaryinsurance", "plan"],
   insPhone: ["insurancephone", "payerphone", "providerservices", "providerservicesphone", "phone"],
@@ -33,7 +37,7 @@ export const HEADER_SYNONYMS = {
 
 // Bare words that belong to a stronger column when one exists. Without this an
 // unlabelled "ID" column steals policyId from "Member ID".
-const WEAK = new Set(["id", "phone", "plan", "group", "address", "service"]);
+const WEAK = new Set(["id", "phone", "plan", "group", "address", "service", "name", "patient"]);
 
 /* ------------------------------------------------------------ header row */
 
@@ -154,9 +158,18 @@ export function coercePhone(raw) {
 
 export const coerceName = (raw) => String(raw ?? "").trim().replace(/\s+/g, " ").toUpperCase();
 
-// A single "Patient Name" column, in either order.
+// A single "Patient Name" column.
+//
+// A comma is authoritative and means the American order these sheets are written
+// in: "MOUSE, MICKIE" is surname first. Without one there is no signal in the data,
+// so the same convention is assumed — "MOUSE MICKIE" reads as MOUSE / MICKIE — and
+// the result is flagged `guessed` so the import preview can show it before anyone
+// saves a patient named backwards.
+//
+// This used to assume western order for the comma-less case, which is the opposite
+// of what the client's sheets contain.
 export function splitName(raw) {
-  const s = String(raw ?? "").trim().replace(/\s+/g, " ");
+  const s = String(raw ?? "").trim().replace(/\s+/g, " ").replace(/\s*,\s*/, ", ");
   if (!s) return { lastName: "", firstName: "", guessed: false };
   if (s.includes(",")) {
     const [last, first = ""] = s.split(",");
@@ -164,7 +177,7 @@ export function splitName(raw) {
   }
   const parts = s.split(" ");
   if (parts.length === 1) return { lastName: coerceName(parts[0]), firstName: "", guessed: true };
-  return { lastName: coerceName(parts[parts.length - 1]), firstName: coerceName(parts.slice(0, -1).join(" ")), guessed: true };
+  return { lastName: coerceName(parts[0]), firstName: coerceName(parts.slice(1).join(" ")), guessed: true };
 }
 
 /* ------------------------------------------------------------------ rows */
@@ -193,6 +206,16 @@ export function parseRows({ raw, formatted, headerRow, mapping, kind = "patients
         for (const i of d.issues) issues.push({ level: "warn", field: key, msg: i });
       } else if (ID_KEYS.has(key)) values[key] = coerceId(rv, fv);
       else if (key === "insPhone") values[key] = coercePhone(rv ?? fv);
+      else if (key === "patientName") {
+        // One column holding the whole name. Split it, but never over the top of a
+        // sheet that also has real Last and First columns.
+        const n = splitName(rv ?? fv);
+        if (!values.lastName) values.lastName = n.lastName;
+        if (!values.firstName) values.firstName = n.firstName;
+        if (n.guessed && n.firstName) {
+          issues.push({ level: "warn", field: "lastName", msg: `read as ${n.lastName}, ${n.firstName} — no comma to say which way round` });
+        }
+      }
       else if (NAME_KEYS.has(key)) values[key] = coerceName(rv ?? fv);
       else values[key] = String(rv ?? fv ?? "").trim();
     }

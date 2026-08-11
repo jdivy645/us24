@@ -161,8 +161,18 @@ export const FAMILY = { money: "num", percent: "num", count: "num", duration: "n
 // only counts as confirmed when it was spoken near one of these — otherwise a
 // name mentioned once in the call would "confirm" every field it was typed into.
 export const KEYWORDS = {
-  lastName: [["name"], ["patient"], ["member"], ["subscriber"], ["insured"], ["spelled"], ["spell"], ["surname"]],
-  firstName: [["name"], ["patient"], ["member"], ["subscriber"], ["insured"], ["spelled"], ["spell"]],
+  // The two-word forms come first because longer phrases win the tokens they cover.
+  // Without them both name fields opened on the bare word "name" and the gate could
+  // not tell "the last name is Yusuff" from "the first name is Tajudeen" — it let
+  // either value confirm either field. American order, last then first, is what
+  // these calls use and what the client's form expects.
+  //
+  // "first" arrives as "1": numberize() turns spoken ordinals into digits before
+  // any phrase is matched.
+  lastName: [["last", "name"], ["family", "name"], ["surname"],
+    ["name"], ["patient"], ["member"], ["subscriber"], ["insured"], ["spelled"], ["spell"]],
+  firstName: [["1", "name"], ["first", "name"], ["given", "name"],
+    ["name"], ["patient"], ["member"], ["subscriber"], ["insured"], ["spelled"], ["spell"]],
   repName: [["name"], ["speaking"], ["this", "is"], ["rep"], ["representative"], ["agent"], ["assisted"], ["helping"]],
   dob: [["date", "of", "birth"], ["birth"], ["birthday"], ["dob"], ["born"]],
   insName: [["insurance"], ["payer"], ["payor"], ["carrier"], ["plan"], ["calling"], ["policy"], ["coverage"], ["benefits"]],

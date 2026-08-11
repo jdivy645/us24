@@ -34,6 +34,7 @@ test("EXTRACT the real call yields exactly what the rep actually stated", () => 
     authAfter: "8",
     tfl: "180 DAYS",   // no "FROM DOS": the rep's phrase came through as "data service"
     serviceType: "PT", // from our own opening turn — see the exception below
+    dob: "2010-10-07", // read from our own turn too, for the same reason
   });
 });
 
@@ -56,8 +57,11 @@ test("EXTRACT would have prevented every data-entry defect in this record", () =
 // ---------------- the safety property ----------------
 
 test("EXTRACT nothing our own agent said is ever proposed", () => {
+  // Two exceptions, both argued below: the discipline the call was placed about,
+  // and the date of birth. Everything else must come from the payer's mouth.
+  const OURS = new Set(["serviceType", "dob"]);
   for (const [k, p] of Object.entries(x.values)) {
-    if (k === "serviceType") continue;   // the one exception, argued below
+    if (OURS.has(k)) continue;
     assert.notEqual(roleAt(parsed.ranges, p.span.start), "agent", `${k} was proposed from our own turn`);
   }
   // "The member has met 526.24, right?" is Savi's arithmetic. The rep answered the
@@ -67,6 +71,21 @@ test("EXTRACT nothing our own agent said is ever proposed", () => {
   for (const k of ["dedMet", "dedRem"]) {
     assert.ok(!parsed.text.slice(x.values[k].span.start, x.values[k].span.end).includes("526"), k);
   }
+});
+
+test("EXTRACT the date of birth may come from our own voice, because we are the ones who read it", () => {
+  // The call flows the other way for the identity fields: our agent reads the DOB
+  // out and the rep looks the member up. Filtering our voice out of extraction —
+  // right for every value the payer supplies — left the DOB unreadable on every
+  // real call, which is half of why the top of the form arrived empty.
+  //
+  // A date can be trusted this way because it has a shape nothing else shares. The
+  // member ID cannot, and is deliberately not extended the same exception: an
+  // identifier is a digit run and so is a dollar amount, and on this very call a
+  // bare "3,000" beside the word "member" was proposed as the member ID.
+  assert.equal(x.values.dob.value, "2010-10-07");
+  assert.equal(roleAt(parsed.ranges, x.values.dob.span.start), "agent");
+  assert.ok(!("policyId" in x.values), "the member ID must not be taken from our own voice");
 });
 
 test("EXTRACT the discipline is the one exception to that, and only that", () => {
@@ -79,9 +98,10 @@ test("EXTRACT the discipline is the one exception to that, and only that", () =>
   assert.equal(roleAt(parsed.ranges, x.values.serviceType.span.start), "agent");
   assert.match(x.values.serviceType.why, /the call was placed about/);
 
-  // And it is genuinely the only one: no other field may take this route.
+  // And the exceptions are genuinely only these two: no other field may take a
+  // value from our own turn.
   const fromUs = Object.keys(x.values).filter((k) => roleAt(parsed.ranges, x.values[k].span.start) === "agent");
-  assert.deepEqual(fromUs, ["serviceType"]);
+  assert.deepEqual(fromUs.sort(), ["dob", "serviceType"]);
 });
 
 test("EXTRACT a discipline mentioned in passing is not what the call is about", () => {
@@ -119,10 +139,21 @@ test("EXTRACT surfaces what only our side said, rather than dropping it silently
   assert.ok(!("visitLimit" in x.values), "and that it was not filled in");
 });
 
-test("EXTRACT identity, prose and bookkeeping fields are refused with a reason", () => {
-  for (const k of ["lastName", "firstName", "dob", "insName", "policyId"]) {
-    assert.equal(x.skipped[k], "identity-supplied-by-provider", k);
+test("EXTRACT prose and bookkeeping fields are refused with a reason", () => {
+  // The insurance name is refused because speech mangles prose past recovery, not
+  // because the provider supplied it — the reason shown should say which.
+  assert.equal(x.skipped.insName, "prose-not-reversible");
+  // The names are readable now, but only where the call labelled them. This call
+  // never says "the last name is…", so nothing is read and the reason is that the
+  // topic was never named — not that it was forbidden.
+  for (const k of ["lastName", "firstName"]) {
+    assert.equal(x.skipped[k], "topic-never-named", k);
+    assert.ok(!(k in x.values), k);
   }
+  // The DOB and the member ID are no longer refused outright. The DOB was read
+  // from this call; the member ID simply was not found on it.
+  assert.ok(!("dob" in x.skipped), "the DOB is readable now");
+  assert.equal(x.skipped.policyId, "no-candidate");
   for (const k of ["repName", "planType", "coverage", "authHow", "claimAddr", "primary"]) {
     assert.equal(x.skipped[k], "prose-not-reversible", k);
   }

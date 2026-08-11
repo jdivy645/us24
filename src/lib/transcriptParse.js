@@ -39,6 +39,40 @@ const RE_LABEL_ALONE = new RegExp(
 
 // name + when, from either timestamp position
 const labelParts = (m) => ({ speaker: squash(m[2]), at: squash(m[1] || m[3] || ""), text: squash(m[4] ?? "") });
+// Microsoft Teams. The speaker and the clock share a line with NO colon, and the
+// words follow underneath:
+//
+//   Saurabh Sharma   0:08
+//   You can have it here.
+//
+// Every other label format in this file is anchored by that colon, so a Teams
+// export used to fall through to `plain` — which is not merely a lost feature. The
+// clock stays in the text, and "9:00" a few tokens from the word "copay" was
+// measured writing $9.00 into a co-pay field on a call where the rep said there
+// was none. A timestamp reaching the matcher is the exact hazard this module was
+// written to prevent.
+const RE_TEAMS_HEADER = /^(?:>>\s*)?([A-Za-z][A-Za-z0-9 .'’_-]{0,58}?)\s{1,}(\d{1,2}:\d{2}(?::\d{2})?)\s*$/;
+
+// Prose can end in a time ("...call me back at 4:30"), so a header must also look
+// like a name: no sentence punctuation, and few enough words to be one.
+const looksLikeSpeaker = (name) =>
+  !/[.!?,;:]/.test(name) && name.trim().split(/\s+/).length <= 5;
+
+const teamsHeader = (line) => {
+  const m = line.match(RE_TEAMS_HEADER);
+  return m && looksLikeSpeaker(m[1]) ? { speaker: squash(m[1]), at: m[2] } : null;
+};
+
+// The chrome Teams wraps a transcript in. The date line is the dangerous one — it
+// is a run of digits that tokenises straight into the stream a member ID is matched
+// against.
+const RE_TEAMS_CHROME = [
+  /^.*-\d{8}_\d{6}-Meeting Recording\s*$/i,
+  /^[A-Z][a-z]+ \d{1,2}, \d{4},? \d{1,2}:\d{2}\s*(?:AM|PM)?\s*$/i,
+  /^\d+m \d+s\s*$/i,
+  /^.{1,60} (?:started|stopped) transcription\s*$/i,
+];
+
 const RE_VTT_CUE = /^(\d{1,2}:)?\d{1,2}:\d{2}[.,]\d{3}\s*-->\s*(\d{1,2}:)?\d{1,2}:\d{2}[.,]\d{3}/;
 const RE_VTT_VOICE = /^<v\s+([^>]+)>([\s\S]*?)(?:<\/v>)?$/i;
 const RE_SRT_INDEX = /^\d+$/;
@@ -67,6 +101,35 @@ function parseRingCentral(lines) {
   }
   if (cur) turns.push(cur);
   return turns.map((t) => ({ speaker: t.speaker, at: t.at, text: t.parts.join(" ") }));
+}
+
+function parseTeams(lines) {
+  const turns = [];
+  let cur = null;
+  for (const line of lines) {
+    if (RE_TEAMS_CHROME.some((re) => re.test(line.trim()))) continue;
+    const h = teamsHeader(line);
+    if (h) {
+      if (cur) turns.push(cur);
+      cur = { speaker: h.speaker, at: h.at, parts: [] };
+      continue;
+    }
+    if (cur && line.trim()) cur.parts.push(squash(line));
+  }
+  if (cur) turns.push(cur);
+  // Teams starts a new block on every pause, so one person answering a question
+  // over three breaths becomes three turns. Merged, because the turn is what the
+  // Q&A projection reasons about — three fragments of one answer look like three
+  // separate answers to it.
+  const merged = [];
+  for (const t of turns) {
+    const text = t.parts.join(" ");
+    if (!text) continue;
+    const last = merged[merged.length - 1];
+    if (last && last.speaker === t.speaker) { last.text += " " + text; continue; }
+    merged.push({ speaker: t.speaker, at: t.at, text });
+  }
+  return merged;
 }
 
 function parseLabelled(lines) {
@@ -134,6 +197,12 @@ function detect(raw, lines) {
   const headers = lines.filter((l) => RE_RC_HEADER.test(l)).length;
   const first = lines.find((l) => l.trim());
   if (headers >= 2 || (headers === 1 && first && RE_RC_HEADER.test(first))) return "ringcentral";
+  // Teams, before the colon formats: a name-and-clock line carries no colon, so the
+  // two cannot be confused. Held to the same bar `labelled` uses — several of them,
+  // and a name that repeats — so one line of prose ending in a time cannot reshape
+  // a plain transcript.
+  const teams = lines.map(teamsHeader).filter(Boolean).map((h) => h.speaker);
+  if (teams.length >= 3 && new Set(teams).size < teams.length) return "teams";
   // A label format has to repeat: "Note: ..." at the top of a plain file is not a
   // speaker, so require several labelled lines and at least one repeated name.
   const labels = lines
@@ -228,12 +297,17 @@ export function parseTranscript(raw, opts = {}) {
   let turns =
     format === "ringcentral" ? parseRingCentral(lines)
       : format === "vtt" ? parseCues(lines)
-        : format === "labelled" ? parseLabelled(lines)
-          : [{ speaker: "", at: "", text: squash(src.replace(/\n+/g, "\n")).trim() }];
+        : format === "teams" ? parseTeams(lines)
+          : format === "labelled" ? parseLabelled(lines)
+            : [{ speaker: "", at: "", text: squash(src.replace(/\n+/g, "\n")).trim() }];
 
   if (format === "plain") {
-    // Keep the original line structure — segment() relies on newlines.
-    turns = [{ speaker: "", at: "", text: src.trim() }];
+    // Keep the original line structure — segment() relies on newlines. The export
+    // chrome still goes: a Teams file whose speaker lines were not recognised is
+    // the case most likely to reach here, and its date line is a digit run that
+    // tokenises straight into the stream member IDs are matched against.
+    const body = lines.filter((l) => !RE_TEAMS_CHROME.some((re) => re.test(l.trim())));
+    turns = [{ speaker: "", at: "", text: body.join("\n").trim() }];
   }
 
   turns = turns.filter((t) => t.text);
