@@ -16,7 +16,14 @@ export const HEADER_SYNONYMS = {
   insPhone: ["insurancephone", "payerphone", "providerservices", "providerservicesphone", "phone"],
   policyId: ["policyid", "memberid", "memberno", "membernumber", "subscriberid", "insuranceid", "memberidnumber", "id"],
   groupId: ["groupid", "groupno", "groupnumber", "grp", "grpno", "group"],
-  planType: ["plantype", "product", "planname", "coverageplan"],
+  // "Plan name" used to fall to planType, because there was no primary plan-name
+  // field to put it in. There is now, and a roster's "Plan Name" column means it.
+  planType: ["plantype", "product", "coverageplan"],
+  planName: ["planname", "plandescription", "productname"],
+  projectName: ["project", "projectname", "client", "clientname", "account"],
+  category: ["category", "categoryname", "worktype"],
+  requestDate: ["requestdate", "receiveddate", "daterequested", "requested"],
+  initialTx: ["initialtreatment", "initialtreatmentdate", "startofcare", "socdate", "treatmentstartdate"],
   payerId: ["payerid", "payorid", "edi", "edipayerid"],
   claimAddr: ["claimaddress", "claimmailingaddress", "mailingaddress", "address"],
   tfl: ["tfl", "timelyfiling", "timelyfilinglimit", "filinglimit"],

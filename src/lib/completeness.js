@@ -49,20 +49,55 @@ const sec = (v) => v.hasSec === "YES";
 // filing limits, claim address, payer phone). We already hold those, they are
 // filled from our own records, and listing them as things to chase the rep for is
 // how an operator ends up asking for something that was never theirs to give.
+// Named on the requirements call as required, but not `ask` fields — nobody rings a
+// payer to find out which project a record belongs to. They are still required to
+// save, so they live in the same list; `cls: "internal"` is what lets the UI keep
+// them out of "Still to ask", which must go on meaning "ask the rep for this".
+//
+// insName is `onFile` rather than `ask` for the same reason as the patient's name,
+// so it needs an explicit entry here the way secName and secPolicy do.
+const RECORD_FIELDS = ["projectName", "requestMode", "requestDate", "username", "initialTx", "insName"];
+
 export const MANDATORY_FIELDS = [
   ...ASKED_FIELDS.map((key) => ({ key, label: HEAD[key] || key, cls: classOf(key), when: REQUIRED_WHEN[key] })),
+  ...RECORD_FIELDS.map((key) => ({ key, label: HEAD[key] || key, cls: classOf(key), when: REQUIRED_WHEN[key] })),
   { key: "secName", label: "Secondary insurance name", cls: "unclassed", when: sec },
   { key: "secPolicy", label: "Secondary policy ID", cls: "unclassed", when: sec },
 ];
 
-export function checkCompleteness(v, meta) {
-  const required = MANDATORY_FIELDS.filter((f) => !f.when || f.when(v));
+// A request that was never a phone call cannot produce a rep name or a call
+// reference. Exempting them is the same judgement as REQUIRED_WHEN: a checklist
+// that asks for something unobtainable teaches people to ignore the checklist.
+export const MODE_EXEMPT = {
+  FAX: ["repName", "callRef"],
+  WEBSITE: ["repName", "callRef"],
+};
+
+// `cfg` is the project's rule for this request mode: { add: [keys], exempt: [keys] }.
+// It is optional and defaults to nothing, so every existing caller and every test
+// that predates project configuration keeps its exact previous behaviour.
+export function requiredFor(v, cfg = {}) {
+  const exempt = new Set([...(cfg.exempt || []), ...(MODE_EXEMPT[up(v.requestMode)] || [])]);
+  const known = new Set(MANDATORY_FIELDS.map((f) => f.key));
+  const extra = (cfg.add || [])
+    .filter((key) => !known.has(key))
+    .map((key) => ({ key, label: HEAD[key] || key, cls: classOf(key), when: REQUIRED_WHEN[key] }));
+  return [...MANDATORY_FIELDS, ...extra]
+    .filter((f) => !exempt.has(f.key))
+    .filter((f) => !f.when || f.when(v));
+}
+
+export function checkCompleteness(v, meta, cfg = {}) {
+  const required = requiredFor(v, cfg);
   const blank = required.filter((f) => !isAnswered(v[f.key]) && !isBypassed(meta, f.key));
   return {
     required: required.length,
     requiredKeys: required.map((f) => f.key),
     answered: required.length - blank.length,
     blank,
+    // What the rep still has to be asked for, which is not the same list as what is
+    // missing: the project name and the request date are ours to supply.
+    stillToAsk: blank.filter((f) => f.cls !== "internal" && f.cls !== "onFile"),
     bypassed: required.filter((f) => isBypassed(meta, f.key)).map((f) => f.key),
     incomplete: blank.length > 0,
   };

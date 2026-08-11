@@ -80,10 +80,21 @@ test("deductible state drives both, and reads remaining before met/individual", 
 // ---------------- document structure ----------------
 
 test("row order matches the client template exactly", () => {
+  // `project` was added ahead of the client's own first row on request: the
+  // document has to say which project it belongs to before it says anything else.
+  // Everything below it is untouched and still in the template's order.
   assert.deepEqual(buildVobDoc(ASH, {}).rows.map((r) => r.id), [
-    "patient", "dates", "payer", "plan", "copay", "coins", "visits",
+    "project", "patient", "dates", "payer", "plan", "copay", "coins", "visits",
     "auth", "authnum", "parties", "claims", "sec1", "sec2", "sec3", "sec4",
   ]);
+});
+
+test("the project block carries what the record is filed under", () => {
+  const rows = buildVobDoc({ ...ASH, projectName: "EC Marvel", category: "VOB", requestMode: "FAX", requestDate: "2026-08-03" }, {}).rows;
+  const text = JSON.stringify(rows.find((r) => r.id === "project"));
+  for (const bit of ["EC MARVEL", "VOB", "FAX", "08/03/2026"]) {
+    assert.ok(text.includes(bit), `the project row does not show "${bit}"`);
+  }
 });
 
 test("the secondary block prints even with no secondary insurance", () => {

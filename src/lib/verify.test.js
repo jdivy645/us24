@@ -6,9 +6,13 @@ import { buildTranscriptTxt } from "./transcriptFile.js";
 import { sampleForm, initialForm } from "../data/fields.js";
 
 const SAMPLE = {
+  // Work-tracking fields. Required to save, but never asked of the rep.
+  projectName: "DEMO", requestMode: "CALL", requestDate: "2026-02-27", username: "SP", initialTx: "2026-03-09",
   lastName: "YUSUFF", firstName: "TAJUDEEN", dob: "1957-12-31",
   insName: "AETNA", insPhone: "800-624-0756", policyId: "101619535700", groupId: "000003-TX",
-  planType: "HMO AETNA MEDICARE DUAL CARE", network: "IN NETWORK", coverage: "INN BENEFITS WITH AUTH",
+  // The payer quoted a plan type but no separate marketing plan name. "NA" is an
+  // answer, not a blank — the same rule that lets a plan with no deductible say so.
+  planType: "HMO AETNA MEDICARE DUAL CARE", planName: "NA", network: "IN NETWORK", coverage: "INN BENEFITS WITH AUTH",
   effDate: "2026-03-01", termDate: "CURRENT", payerId: "60054", hra: "NA", copay: "NO", copayAmt: "$0.00",
   covPct: "100%", coins: "NO", coinsAmt: "0%", dedApply: "NO", dedInd: "NA", oop: "NA",
   visitLimit: "MN (medically necessary)", visitUsed: "3", authEval: "YES", authTx: "YES", referral: "NO", pcpRef: "NO",
@@ -277,9 +281,11 @@ test("a fresh form flags every required field, with no pre-picked answers", () =
   // Everything required is blank except the service type, which is the practice's
   // own context rather than one of the rep's answers — they tell the rep which
   // discipline they are calling about, not the other way round.
+  // …and the request mode, which is bookkeeping rather than one of the rep's
+  // answers: a record is a phone call unless someone says otherwise.
   assert.deepStrictEqual(
-    c.blank.length === c.required ? [] : MANDATORY_FIELDS.filter((f) => fresh[f.key]).map((f) => f.key),
-    ["serviceType"]);
+    (c.blank.length === c.required ? [] : MANDATORY_FIELDS.filter((f) => fresh[f.key]).map((f) => f.key)).sort(),
+    ["requestMode", "serviceType"]);
   // No answer-bearing select is pre-picked: a default would count as answered and
   // would then be verified against a call nobody had yet made.
   for (const k of ["copay", "coins", "dedApply", "authEval", "authTx", "referral", "pcpRef", "hasSec", "network", "networkInd", "termDate"]) {
@@ -305,13 +311,21 @@ test("the red 'already on file' fields are never chased on the call", () => {
   // own records. Listing them as things to ask the rep for is how an operator ends
   // up asking for something that was never theirs to give.
   const c = checkCompleteness({});
-  const asked = new Set(c.blank.map((f) => f.key));
+  const asked = new Set(c.stillToAsk.map((f) => f.key));
   for (const k of ["lastName", "firstName", "dob", "insName", "insPhone", "payerId", "tfl", "tflCorr", "claimAddr"]) {
     assert.ok(!asked.has(k), `${k} is on file — it must not appear in "still to ask"`);
   }
   // …and the green ones are.
   for (const k of ["policyId", "groupId", "coverage", "effDate", "visitLimit", "repName", "callRef"]) {
     assert.ok(asked.has(k), `${k} must be asked on the call`);
+  }
+  // The client asked for the insurance name and the project to be required. Being
+  // required to SAVE and being chased ON THE CALL are different things, and the
+  // split is the whole point: nobody rings a payer to ask which project this is.
+  const mustFill = new Set(c.blank.map((f) => f.key));
+  for (const k of ["insName", "projectName", "requestDate", "username"]) {
+    assert.ok(mustFill.has(k), `${k} must be required to save`);
+    assert.ok(!asked.has(k), `${k} must not be listed as something to ask the rep`);
   }
 });
 

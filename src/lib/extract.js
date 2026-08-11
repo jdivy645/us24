@@ -92,8 +92,10 @@ const PROSE = new Set(Object.keys(ANCHORS).filter((k) => ANCHORS[k].m === "none"
 // record, silently, into the fields the whole document identifies a person by.
 const IDENTITY = new Set(VERIFY_FIELDS.filter((f) => f.identity).map((f) => f.key));
 
-// Our clock, our staff, and a narrative generated from the other fields.
-const INTERNAL = new Set(["today", "verifiedBy", "note"]);
+// Our clock, our staff, our own scheduling, the work-tracking fields, and a
+// narrative generated from the other fields. Nothing here is the payer's to say.
+const INTERNAL = new Set(["today", "verifiedBy", "note", "pat",
+  "projectName", "category", "requestMode", "requestDate", "verifType", "username", "initialTx"]);
 
 export const NEVER_EXTRACT = new Set([...PROSE, ...IDENTITY, ...INTERNAL]);
 

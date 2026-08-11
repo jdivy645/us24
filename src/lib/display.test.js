@@ -48,7 +48,7 @@ test("DISPLAY every check status has a sort rank", () => {
 });
 
 test("DISPLAY every verdict has a colour, in both places a verdict is shown", () => {
-  const pill = keysOf(read("../App.jsx"), "VERDICT_PILL");
+  const pill = keysOf(read("../screens/Records.jsx"), "VERDICT_PILL");
   for (const vd of ["APPROVED", "ATTESTED", "REJECTED"]) {
     assert.ok(pill.has(vd), `VERDICT_PILL has no colour for "${vd}"`);
   }
@@ -63,7 +63,7 @@ test("DISPLAY every verdict has a sentence telling the operator what was saved",
   // The same defect one layer over: this chain had no ATTESTED branch, so the
   // operator finished signing off twenty-three values read from a call and was
   // told no transcript was attached. Nothing threw; the record itself was right.
-  const src = read("../App.jsx");
+  const src = read("../screens/NewVerification.jsx");
   const at = src.indexOf("const SAVED = {");
   assert.ok(at >= 0, "the save message must be a table, not a chain — a chain hides the gap");
   const body = src.slice(at, src.indexOf("};", at) + 2);

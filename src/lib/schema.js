@@ -2,7 +2,9 @@
 // readable without wading through IndexedDB plumbing, and importable from tests.
 
 export const DB_NAME = "us24_vob";
-export const DB_VERSION = 2;
+// v3 added the work-management layer around a verification: which project it belongs
+// to, who entered it, who QA'd it, and what QA found.
+export const DB_VERSION = 3;
 
 // v1 held only `audio`, written by the old recording upload. It stays for records
 // saved before that was removed; nothing writes to it now.
@@ -45,6 +47,46 @@ export const STORES = {
   transcripts: { keyPath: "id", indexes: [] },
   imports: { keyPath: "id", indexes: [] },
   meta: { keyPath: null, indexes: [] },
+
+  // ---- v3 -----------------------------------------------------------------
+  // The unit of work assignment. Required-field rules hang off the project
+  // rather than off a separate store, so "this client needs a PCP referral and
+  // that one does not" is one row to edit rather than a join.
+  projects: {
+    keyPath: "id",
+    indexes: [
+      { name: "by_key", on: "key", unique: true },
+      { name: "by_archived", on: "archivedFlag" },
+    ],
+  },
+  // Attribution and queue routing, not security. There are no passwords here and
+  // there is nothing to authenticate against — one browser, one team.
+  users: {
+    keyPath: "id",
+    indexes: [
+      { name: "by_key", on: "key", unique: true },
+      { name: "by_role", on: "role" },
+    ],
+  },
+  // What QA found, one row per finding, so a record can carry several. A clean
+  // pass writes a NONE row: "QA looked and found nothing" is a fact worth
+  // storing, and an absence of rows cannot say it.
+  errors: {
+    keyPath: "id",
+    indexes: [
+      { name: "by_version", on: "versionId" },
+      { name: "by_project", on: "projectId" },
+      { name: "by_priority", on: "priority" },
+      { name: "by_at", on: "at" },
+    ],
+  },
+  comments: {
+    keyPath: "id",
+    indexes: [
+      { name: "by_version", on: "versionId" },
+      { name: "by_at", on: "at" },
+    ],
+  },
 };
 
 // Carrier master data: entered once, reused on every later VOB for that payer.
@@ -55,7 +97,7 @@ export const CARRIER_FIELDS = ["payerId", "insPhone", "claimAddr", "tfl", "tflCo
 // order of this table: patient beats case beats carrier beats prior.
 export const PREFILL_TIER = {
   patient: ["lastName", "firstName", "dob"],
-  case: ["insName", "policyId", "groupId", "planType"],
+  case: ["insName", "policyId", "groupId", "planType", "planName", "projectName", "category"],
   carrier: CARRIER_FIELDS,
   prior: [
     "network", "networkInd", "coverage", "effDate", "hra",
@@ -77,11 +119,13 @@ export const PREFILL_TIER = {
 export const REFERENCE_FIELDS = ["dedMet", "dedRem", "oopMet", "oopRem", "visitUsed"];
 
 // Always typed fresh.
-export const NEVER_PREFILL = ["today", "termDate", "repName", "callRef", "authNum", "authDates", "note", "verifiedBy"];
+export const NEVER_PREFILL = ["today", "termDate", "repName", "callRef", "authNum", "authDates", "note", "verifiedBy",
+  "requestDate", "verifType", "username", "requestMode"];
 
 // Fields that change every call and would bury the signal in a "what changed"
 // summary. They are still stored on every version.
-export const PER_CALL_FIELDS = ["today", "repName", "callRef", "authNum", "note", "verifiedBy"];
+export const PER_CALL_FIELDS = ["today", "repName", "callRef", "authNum", "note", "verifiedBy",
+  "requestDate", "requestMode", "verifType", "username"];
 
 // ---------------------------------------------------------------------------
 // Where each field's value comes from.
@@ -119,9 +163,18 @@ const CLASSES = {
   // name: it is how we knew which number to dial. Nobody asks the rep who they
   // work for. It is still hard-required at save, alongside the patient name.
   onFile: ["lastName", "firstName", "dob", "insName", "insPhone", "claimAddr", "payerId", "tfl", "tflCorr"],
-  internal: ["today", "note"],
+  // The bookkeeping fields belong here for the reason the class exists: there is
+  // nothing in a phone call to verify a project name or a request date against, so
+  // grading them would only ever produce noise.
+  // `initialTx` is here rather than in `ask` because the practice owns that date,
+  // not the payer — the rep is never asked when treatment starts, so grading it
+  // against the call would mark every record "not heard".
+  // `pat` is typed by hand into the summary and belongs to nobody but the person
+  // filling the form, so — like the note beside it — there is nothing in the call
+  // to grade it against.
+  internal: ["today", "note", "pat", "projectName", "category", "requestMode", "requestDate", "verifType", "username", "initialTx"],
   ask: [
-    "policyId", "groupId", "serviceType", "planType", "network", "networkInd", "coverage",
+    "policyId", "groupId", "serviceType", "planType", "planName", "network", "networkInd", "coverage",
     "effDate", "termDate", "copayAmt", "visitLimit", "visitUsed", "authWindow", "repName", "callRef",
   ],
   askStrict: [

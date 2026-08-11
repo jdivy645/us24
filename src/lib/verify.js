@@ -115,6 +115,10 @@ export const VERIFY_FIELDS = [
   { key: "termDate", label: "Termination date", type: "date", gate: "soft" },
   { key: "primary", label: "Primary payer", type: "tokens", gate: "soft" },
   { key: "secPlan", label: "Secondary plan", type: "tokens", gate: "soft" },
+  // Soft for the same reason as secPlan: plan names come through speech-to-text
+  // mangled ("Medicare Dual Care" as "medic air dual care"), so a miss here is
+  // evidence about the transcript, not about the record.
+  { key: "planName", label: "Plan name", type: "tokens", gate: "soft" },
   { key: "secEff", label: "Secondary effective date", type: "date", gate: "soft" },
   { key: "secDed", label: "Secondary deductible", type: "money", gate: "soft" },
   { key: "secVisit", label: "Secondary visit limit", type: "number", gate: "soft" },

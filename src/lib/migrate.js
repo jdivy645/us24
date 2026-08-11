@@ -119,10 +119,24 @@ export function migrateLegacy(rows, { now = "1970-01-01T00:00:00.000Z" } = {}) {
 }
 
 // The flat row shape the Excel export and the legacy standalone HTML understand.
-export function toLegacyRow(version, kase, transcriptText = "") {
+//
+// `extra` carries the counts that live in other stores (QA findings, comments). The
+// caller passes them because looking them up here would mean a database read per
+// row — and this function has to stay pure enough to test without one.
+export function toLegacyRow(version, kase, transcriptText = "", extra = {}) {
   const v = version.verify || {}, c = version.completeness || {};
+  const w = version.workflow || {};
+  const f = version.flags || {};
   return {
     ...version.form,
+    // Written after the save, so they are envelope fields rather than form fields.
+    _status: w.status || "finished", _qaName: w.qaName || "",
+    _submittedAt: w.submittedAt || "", _qaAt: w.qaAt || "", _finishedAt: w.finishedAt || "",
+    _workflow: w,
+    _authRequired: f.authRequired ? "YES" : "NO",
+    _flags: f,
+    _errorCount: extra.errorCount ?? 0, _topPriority: extra.topPriority || "",
+    _errors: extra.errors || [], _comments: extra.comments || [],
     _id: version.id, _savedAt: version.savedAtLabel || version.savedAt, _file: version.file,
     _verdict: v.verdict, _matched: v.matched, _total: v.total,
     _missing: v.missing, _mismatch: v.mismatch, _bypassed: v.bypassed, _carrier: v.carrier,

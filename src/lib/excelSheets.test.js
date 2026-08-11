@@ -5,9 +5,13 @@ import { HEAD } from "../data/fields.js";
 
 const long = (chars) => "the deductible is nine hundred dollars and the co-pay is twenty five ".repeat(Math.ceil(chars / 68)).slice(0, chars);
 
+// Looked up by name rather than by position: the workbook gained the client's
+// per-section sheets, and an index would silently start reading a different one.
+const sheet = (sheets, name) => sheets.find((s) => s.name === name);
+
 test("a long transcript survives the export with no characters lost", () => {
   const text = long(150000);
-  const [, t] = buildSheets([{ _id: "r1", lastName: "MOUSE", firstName: "MICKIE", _transcript: text }]);
+  const t = sheet(buildSheets([{ _id: "r1", lastName: "MOUSE", firstName: "MICKIE", _transcript: text }]), "Transcripts");
   const joined = t.rows.map((r) => r.Text).join(" ");
   // Segmenting normalises runs of whitespace, so compare on words.
   assert.deepEqual(joined.split(/\s+/).filter(Boolean), text.split(/\s+/).filter(Boolean));
@@ -45,7 +49,47 @@ test("array audit columns are flattened, not stringified as objects", () => {
 
 test("records with no transcript produce no Transcripts sheet", () => {
   const sheets = buildSheets([{ _id: "r1", lastName: "MOUSE" }]);
-  assert.equal(sheets.length, 1);
+  assert.equal(sheet(sheets, "Transcripts"), undefined);
+});
+
+test("records with no QA findings produce no Error Log sheet", () => {
+  assert.equal(sheet(buildSheets([{ _id: "r1", lastName: "MOUSE" }]), "Error Log"), undefined);
+});
+
+test("the client's section sheets are all present and readable on their own", () => {
+  const sheets = buildSheets([{
+    _id: "r1", projectName: "EC MARVEL", lastName: "MOUSE", firstName: "MICKIE", dob: "1928-11-18",
+    insName: "AETNA", policyId: "123456", authEval: "YES", repName: "CLARK", _authRequired: "YES",
+  }]);
+  for (const name of ["Patient", "Insurance", "Authorization", "Call Information"]) {
+    const s = sheet(sheets, name);
+    assert.ok(s, `${name} sheet is missing`);
+    // Each section repeats who and which project, so a sheet pulled out on its own
+    // still identifies its rows.
+    for (const col of [HEAD.projectName, HEAD.lastName]) {
+      assert.ok(s.header.includes(col), `${name} sheet does not carry "${col}"`);
+    }
+    assert.equal(s.header.length, s.widths.length, `${name} sheet has a width per column`);
+  }
+  assert.equal(sheet(sheets, "Authorization").rows[0][HEAD._authRequired], "YES");
+  assert.equal(sheet(sheets, "Insurance").rows[0][HEAD.policyId], "123456");
+});
+
+test("QA findings get one row each so P1s can be counted", () => {
+  const sheets = buildSheets([{
+    _id: "r1", projectName: "EC MARVEL", lastName: "MOUSE", firstName: "MICKIE",
+    _errors: [
+      { priority: "P1", fieldKey: "policyId", note: "wrong member id", by: "QA1", at: "2026-08-11T09:00:00Z" },
+      { priority: "P3", fieldKey: "", note: "typo in the note", by: "QA1", at: "2026-08-11T09:01:00Z" },
+    ],
+  }]);
+  const log = sheet(sheets, "Error Log");
+  assert.equal(log.rows.length, 2);
+  assert.equal(log.rows[0].Priority, "P1");
+  assert.equal(log.rows[0].Field, HEAD.policyId);
+  assert.equal(log.rows[1].Field, "Whole record");
+  // …and the main sheet still reads them, so one sheet tells the whole story.
+  assert.match(sheet(sheets, "VOB Log").rows[0][HEAD._errors], /P1 Policy ID: wrong member id/);
 });
 
 test("segmentText splits on words and loses nothing", () => {

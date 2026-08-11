@@ -17,6 +17,12 @@ export default function VerifyPanel({ result, comp, hasTranscript }) {
   // after a perfect nine-field fill told the operator it had failed.
   const machine = attested.length + autofilled.length;
 
+  // checkCompleteness() splits these; the fallback keeps the panel working if it is
+  // ever handed a completeness object from an older saved record.
+  const ask = comp.stillToAsk || comp.blank;
+  const askKeys = new Set(ask.map((f) => f.key));
+  const ours = comp.blank.filter((f) => !askKeys.has(f.key));
+
   let pill;
   if (mismatched.length) pill = <span className="pill bad">{mismatched.length} CONTRADICTED</span>;
   else if (!hasTranscript) pill = <span className="pill na">NO TRANSCRIPT</span>;
@@ -40,14 +46,28 @@ export default function VerifyPanel({ result, comp, hasTranscript }) {
         </div>
       </div>
       <div className="card-body">
-        {comp.incomplete ? (
+        {/* Two lists, because they are two different jobs. "Still to ask" is what
+            the rep has to be asked for while the call is live. The project name and
+            the request date are also required, but nobody rings a payer for them —
+            listing them together is how an operator ends up asking for something
+            that was never the payer's to give. */}
+        {ask.length > 0 && (
           <div className="vgap">
-            <div className="vgap-head">Still to ask — {comp.blank.length} required field{comp.blank.length > 1 ? "s" : ""}</div>
+            <div className="vgap-head">Still to ask — {ask.length} field{ask.length > 1 ? "s" : ""} from the rep</div>
             <div className="vgap-list">
-              {comp.blank.map((f) => <span key={f.key} className="vchip">{f.label}</span>)}
+              {ask.map((f) => <span key={f.key} className="vchip">{f.label}</span>)}
             </div>
           </div>
-        ) : (
+        )}
+        {ours.length > 0 && (
+          <div className="vgap">
+            <div className="vgap-head">Still to fill in — {ours.length} of ours</div>
+            <div className="vgap-list">
+              {ours.map((f) => <span key={f.key} className="vchip">{f.label}</span>)}
+            </div>
+          </div>
+        )}
+        {!comp.incomplete && (
           <p className="hint" style={{ marginBottom: 10 }}>All {comp.required} required fields answered.</p>
         )}
         {!hasTranscript && checks.length > 0 && (

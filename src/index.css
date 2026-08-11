@@ -308,3 +308,67 @@ mark.hl.auto{background:#EAF2FB;color:#2C6FB8;border-bottom:1.5px solid #2C6FB8}
 .pill.na{background:#EEF1F5;color:#5B6B82}
 .modal-overlay{position:fixed;inset:0;background:rgba(15,27,45,.45);z-index:100;display:flex;align-items:center;justify-content:center;padding:24px}
 .modal{background:var(--white);border-radius:var(--r);box-shadow:var(--shadow);max-width:760px;width:100%;max-height:85vh;overflow:auto}
+
+/* ---- work management: project tabs, filters, dashboard, QA ---------------- */
+
+/* A second level of tabs inside a screen. Deliberately lighter than .tab — the
+   top row says which part of the app you are in, this one says which slice. */
+.subtabs{display:flex;gap:4px;flex-wrap:wrap;padding:10px 20px 0;border-bottom:1px solid var(--line);background:var(--paper)}
+.subtab{background:none;border:0;border-bottom:2px solid transparent;padding:7px 12px 9px;font:inherit;font-size:12px;font-weight:700;
+  color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;gap:6px;border-radius:6px 6px 0 0}
+.subtab:hover{color:var(--brand);background:var(--white)}
+.subtab.active{color:var(--brand);border-bottom-color:var(--accent);background:var(--white)}
+.subtab .count{background:var(--white);border:1px solid var(--line);border-radius:20px;padding:0 7px;font-size:10.5px}
+.subtab.active .count{background:var(--paper)}
+
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.filters select,.filters input{height:34px;font-size:12px}
+.filter-q{flex:1;min-width:240px}
+.filter-date{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--ink-soft)}
+.filter-date input{width:145px}
+.filter-count{margin-left:auto;white-space:nowrap}
+
+/* Sortable headers stay buttons so they are reachable by keyboard — a click-only
+   sort is invisible to anyone not using a mouse. */
+.th-sort{background:none;border:0;padding:0;font:inherit;color:inherit;letter-spacing:inherit;text-transform:inherit;cursor:pointer}
+.th-sort:hover{color:var(--brand)}
+
+.user-pick{height:30px;font-size:12px;background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.24);
+  border-radius:7px;padding:0 26px 0 10px;font-weight:600}
+.user-pick option{color:var(--ink)}
+
+/* ---- dashboard ---- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px}
+.tile{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:14px}
+.tile-value{font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--brand);line-height:1.1}
+.tile-value.t-ok{color:var(--ok)}
+.tile-value.t-warn{color:#B25E12}
+.tile-value.t-bad{color:#C0392B}
+.tile-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft);margin-top:4px}
+.dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
+.dash-card{min-width:0}
+.dash-row{display:flex;align-items:center;gap:10px;margin-bottom:7px;font-size:12px}
+.dash-label{flex:0 0 40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.dash-row .prog{flex:1;min-width:40px}
+.dash-num{flex:0 0 78px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+
+/* ---- QA review ---- */
+.modal.modal-wide{max-width:1180px}
+.qa-split{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
+@media (max-width:1100px){.qa-split{grid-template-columns:1fr}}
+.qa-entry{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 18px}
+.qa-entry input[type=text]{flex:1;min-width:200px}
+.qa-entry select{max-width:220px}
+.qa-comment{background:var(--paper);border:1px solid var(--line);border-radius:7px;padding:9px 11px;margin-bottom:8px;font-size:12.5px}
+.qa-comment-head{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:3px}
+
+/* ---- required-field editor ---- */
+.req-editor{border:1px solid var(--line);border-radius:8px;padding:14px;margin-top:12px;background:var(--paper)}
+.req-grid{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.req-chip{border:1px solid var(--line);background:var(--white);border-radius:20px;padding:4px 11px;font:inherit;font-size:11px;
+  font-weight:700;cursor:pointer;color:var(--ink-soft)}
+.req-chip:hover{border-color:#C6D0DE}
+.req-chip.srequired{background:var(--ok-bg);border-color:#B9E3D2;color:var(--ok)}
+.req-chip.snotrequired{background:#FBEAE7;border-color:#F0C4BC;color:#C0392B;text-decoration:line-through}
+.req-chip:disabled{opacity:.45;cursor:not-allowed}
+.btn-xs{padding:3px 8px;font-size:10.5px}

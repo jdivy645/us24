@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { BYPASS_REASONS } from "../lib/bypass.js";
+import { REQUEST_MODES, VERIF_TYPES } from "../data/fields.js";
 
 // Each input carries its own verification state, so a contradiction is visible
 // where the value is typed rather than only in a panel beside it.
@@ -162,10 +163,10 @@ function Text({ P, id, label, req, type = "text", placeholder, full }) {
   );
 }
 
-function Sel({ P, id, label, options }) {
+function Sel({ P, id, label, options, req }) {
   const state = P.states?.get(id);
   return (
-    <Field id={id} label={label} state={state} P={P}>
+    <Field id={id} label={label} req={req} state={state} P={P}>
       <select id={"f-" + id} value={P.form[id]} disabled={state?.kind === "bypassed"} onChange={(e) => P.set(id, e.target.value)}>
         <option value="">— select —</option>
         {options.map((o) => <option key={o}>{o}</option>)}
@@ -176,22 +177,25 @@ function Sel({ P, id, label, options }) {
 
 // The keys each section owns, so a whole section can be signed for at once.
 const SECTIONS = {
+  work: ["projectName", "category", "requestMode", "verifType", "requestDate"],
   patient: ["lastName", "firstName", "dob", "today"],
-  insurance: ["insName", "insPhone", "policyId", "groupId", "planType", "serviceType",
+  insurance: ["insName", "insPhone", "policyId", "groupId", "planType", "planName", "serviceType",
     "network", "networkInd", "coverage", "effDate", "termDate", "payerId", "hra"],
   financials: ["copay", "copayAmt", "covPct", "coins", "coinsAmt", "dedApply",
     "dedInd", "dedMet", "dedRem", "oop", "oopMet", "oopRem"],
-  auth: ["visitLimit", "visitUsed", "authEval", "authTx", "authAfter", "referral",
+  auth: ["visitLimit", "visitUsed", "initialTx", "authEval", "authTx", "authAfter", "referral",
     "pcpRef", "authHow", "authWindow", "authNum", "authDates"],
-  claims: ["tfl", "tflCorr", "claimAddr", "repName", "callRef", "verifiedBy", "primary"],
+  claims: ["tfl", "tflCorr", "claimAddr", "repName", "callRef", "username", "verifiedBy", "primary"],
   secondary: ["hasSec", "secName", "secPlan", "secPolicy", "secEff", "secDed", "secVisit", "secUsed"],
+  summary: ["pat", "note"],
 };
 
 export default function VerificationForm(props) {
   const {
     form, set, states, onKeep, onBypass, onClearBypass, onGenerateNote,
     onAccept, onReject, onUseSuggestion, onShowInCall, onClearSection,
-    onSave, onPreviewPDF, onClear, onLoadSample,
+    onSave, onSaveDraft, onPreviewPDF, onClear, onLoadSample,
+    projectNames = [],
   } = props;
   const P = { form, set, states, onKeep, onBypass, onClearBypass, onAccept, onReject, onUseSuggestion, onShowInCall };
   const Head = ({ title, k }) => (
@@ -208,6 +212,20 @@ export default function VerificationForm(props) {
       </div>
       <div className="card-body">
 
+        {/* Which piece of work this is. First on the form because it decides which
+            required-field rule applies to everything below it. */}
+        <Head title="Work" k="work" />
+        <div className="grid">
+          <Sel P={P} id="projectName" label="Project" req options={projectNames} />
+          <Text P={P} id="category" label="Category" />
+          <Sel P={P} id="requestMode" label="Request mode" req options={REQUEST_MODES} />
+          <Sel P={P} id="verifType" label="Verification type" options={VERIF_TYPES} />
+          <Text P={P} id="requestDate" label="Request date" type="date" req />
+        </div>
+        {!projectNames.length && (
+          <p className="hint">No projects yet — add one under Admin before saving.</p>
+        )}
+
         <Head title="Patient" k="patient" />
         <div className="grid">
           <Text P={P} id="lastName" label="Last name" req />
@@ -223,6 +241,7 @@ export default function VerificationForm(props) {
           <Text P={P} id="policyId" label="Policy ID" />
           <Text P={P} id="groupId" label="Group ID" />
           <Text P={P} id="planType" label="Plan type" />
+          <Text P={P} id="planName" label="Plan name" req />
           <Sel P={P} id="serviceType" label="Service type" options={["PT", "OT", "ST", "PT/OT", "Chiropractic", "Other"]} />
           <Sel P={P} id="network" label="Network status (group)" options={["IN NETWORK", "OUT OF NETWORK"]} />
           <Sel P={P} id="networkInd" label="Network status (ind. provider)" options={["IN NETWORK", "OUT OF NETWORK"]} />
@@ -253,6 +272,9 @@ export default function VerificationForm(props) {
         <div className="grid">
           <Text P={P} id="visitLimit" label="Visit limitation" placeholder="MN (medically necessary)" />
           <Text P={P} id="visitUsed" label="Visits used" />
+          {/* Ours, not the payer's — the practice knows when care starts. Required
+              because an authorization window is counted from it. */}
+          <Text P={P} id="initialTx" label="Initial treatment date" type="date" req />
           <Sel P={P} id="authEval" label="Auth required — initial eval" options={["YES", "NO"]} />
           <Sel P={P} id="authTx" label="Auth required — treatment" options={["YES", "NO"]} />
           <Text P={P} id="authAfter" label="Auth required after visit #" placeholder="5" />
@@ -271,7 +293,11 @@ export default function VerificationForm(props) {
           <Text P={P} id="claimAddr" label="Claim mailing address" full />
           <Text P={P} id="repName" label="Insurance rep name" />
           <Text P={P} id="callRef" label="Call reference #" />
-          <Text P={P} id="verifiedBy" label="Verified by (your team)" />
+          {/* The last entry fields, as the client asked. `username` is who did the
+              work; `verifiedBy` stays because the transcript parser uses it to tell
+              our own voice from the rep's, and the PDF prints it as initials. */}
+          <Text P={P} id="username" label="Entered by" req />
+          <Text P={P} id="verifiedBy" label="Verified by (initials on the PDF)" />
           <Text P={P} id="primary" label="Primary payer" />
         </div>
 
@@ -287,7 +313,10 @@ export default function VerificationForm(props) {
           <Text P={P} id="secUsed" label="Used limit" />
         </div>
 
-        <div className="section-label">Summary note</div>
+        <Head title="Summary" k="summary" />
+        {/* Typed by hand and left entirely to the person filling the form — it is
+            never read from the call and never checked against it. */}
+        <Text P={P} id="pat" label="PAT" full placeholder="Anything the operator needs to record here" />
         <div className="f">
           <label>
             Additional info
@@ -303,7 +332,11 @@ export default function VerificationForm(props) {
 
       </div>
       <div className="actionbar">
-        <button className="btn btn-primary" onClick={onSave}>Save &amp; generate PDF</button>
+        <button className="btn btn-primary" onClick={onSave}>Save &amp; send to QA</button>
+        {/* A draft is saved work that has not been handed to anyone. It skips the
+            review gate on purpose — half a verification mid-call is the normal
+            state of this form, and losing it to a blocked save helps nobody. */}
+        <button className="btn btn-ghost" onClick={onSaveDraft}>Save as draft</button>
         <button className="btn btn-dark" onClick={onPreviewPDF}>Preview PDF only</button>
         <div className="spacer"></div>
         <button className="btn btn-ghost" onClick={onClear}>Clear form</button>

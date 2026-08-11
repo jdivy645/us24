@@ -103,8 +103,9 @@ export const ANCHORS = {
 
   // never accused of a mismatch — speech mangles these
   lastName: { m: "none" }, firstName: { m: "none" }, repName: { m: "none" },
-  insName: { m: "none" }, planType: { m: "none" }, coverage: { m: "none" },
+  insName: { m: "none" }, planType: { m: "none" }, planName: { m: "none" }, coverage: { m: "none" },
   authHow: { m: "none" }, secName: { m: "none" }, authDates: { m: "none" }, claimAddr: { m: "none" },
+  pat: { m: "none" },
   serviceType: { m: "none", heads: [["service", "type"], ["physical", "therapy"], ["occupational", "therapy"], ["speech", "therapy"], ["therapy"]] },
   primary: { m: "none", heads: [["primary", "insurance"], ["primary", "carrier"], ["primary", "payer"], ["primary"]] },
   secPlan: { m: "none", heads: [["secondary", "plan"], ["supplemental", "plan"]] },

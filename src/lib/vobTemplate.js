@@ -133,12 +133,23 @@ export function buildVobDoc(v, meta = {}) {
   const splitNetwork = !!(v.networkInd || "").trim();
 
   const rows = [
+    // Which piece of work this document is, first — the client asked for the project
+    // name on the PDF, and a document that cannot say which project it belongs to
+    // is not filable.
+    R("project",
+      C(L("projectName", "Project:", up(v.projectName)),
+        L("category", "Category:", up(v.category))),
+      C(L("requestMode", "Request Type:", up(v.requestMode) || "CALL"),
+        L("requestDate", "Request Date:", fmtDate(v.requestDate)),
+        L("verifType", "Verification:", up(v.verifType) || "INITIAL"))),
+
     R("patient",
       C(L("lastName", "Name:", fullName(v))),
       C(L("dob", "DOB:", fmtDate(v.dob)))),
 
     R("dates",
-      C(L("today", "Today's Date:", todayWithInitials(v))),
+      C(L("today", "Today's Date:", todayWithInitials(v)),
+        L("pat", "PAT:", v.pat)),
       C(L("note", "Additional Info:", noteText(v)))),
 
     R("payer",
@@ -150,6 +161,7 @@ export function buildVobDoc(v, meta = {}) {
     R("plan",
       C(L("serviceType", "Service Type:", svc),
         L("planType", "Plan Type:", up(v.planType)),
+        L("planName", "Plan Name:", up(v.planName)),
         L("network", splitNetwork ? "Network Status Group:" : "Network Status:", up(v.network)),
         splitNetwork ? L("networkInd", "Network Status Ind Prov:", up(v.networkInd)) : null,
         L("coverage", "Coverage:", coverageText(v))),
@@ -173,7 +185,8 @@ export function buildVobDoc(v, meta = {}) {
         L("oopRem", "Amount Remaining:", v.oopRem))),
 
     R("visits",
-      C(L("visitLimit", "Visit Limitations:", up(v.visitLimit))),
+      C(L("visitLimit", "Visit Limitations:", up(v.visitLimit)),
+        L("initialTx", "Initial Treatment Date:", fmtDate(v.initialTx))),
       C(L("visitUsed", "Used Visit:", v.visitUsed))),
 
     R("auth",

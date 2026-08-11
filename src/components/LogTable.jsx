@@ -1,5 +1,6 @@
 import { dash, fmtDate } from "../data/fields.js";
 import { recordCompleteness } from "../lib/completeness.js";
+import { STATUS, PRIORITY_LABEL } from "../lib/workflow.js";
 
 // Green means one thing: complete form, everything confirmed.
 const verdictClass = (v, incomplete) =>
@@ -7,21 +8,50 @@ const verdictClass = (v, incomplete) =>
     : v._verdict === "APPROVED" || v._verdict === "ATTESTED" ? (incomplete ? "warn" : "ok")
       : "na";
 
-export default function LogTable({ records, onOpen, onDelete, onTranscript, onAudio, onHistory }) {
+// Where a record is in the QA cycle, at a glance. Returned is the one that needs
+// somebody to do something, so it reads as a warning rather than as neutral.
+const statusClass = (s) =>
+  s === "finished" ? "ok" : s === "returned" ? "bad" : s === "in_qa" || s === "submitted" ? "warn" : "na";
+
+const priorityClass = (p) => (p === "P1" ? "bad" : p === "P2" || p === "P3" ? "warn" : p === "NONE" ? "ok" : "na");
+
+// key: the row value to sort on. Kept beside the header so the two cannot drift.
+const COLUMNS = [
+  { key: "_savedAt", label: "Saved" },
+  { key: "projectName", label: "Project" },
+  { key: "lastName", label: "Patient" },
+  { key: "dob", label: "DOB" },
+  { key: "insName", label: "Insurance" },
+  { key: "policyId", label: "Policy ID" },
+  { key: "serviceType", label: "Service" },
+  { key: "_status", label: "Status" },
+  { key: "_verdict", label: "Verdict" },
+  { key: "_topPriority", label: "QA" },
+  { key: "username", label: "By" },
+];
+
+export default function LogTable({ records, sort, dir, onSort, onOpen, onDelete, onTranscript, onAudio, onHistory, onQa }) {
   if (!records.length) {
     return (
       <div className="empty">
-        <h3>No records yet</h3>
+        <h3>No records here</h3>
         <p>Saved verifications appear here and export straight to Excel.</p>
       </div>
     );
   }
+  const arrow = (key) => (sort !== key ? "" : dir === "asc" ? " ▲" : " ▼");
   return (
     <table className="data">
       <thead>
         <tr>
-          <th>Saved</th><th>Patient</th><th>DOB</th><th>Insurance</th><th>Policy ID</th>
-          <th>Service</th><th>Network</th><th>Verdict</th><th>Rep</th><th>Call ref</th><th></th>
+          {COLUMNS.map((c) => (
+            <th key={c.key}>
+              {onSort
+                ? <button type="button" className="th-sort" onClick={() => onSort(c.key)}>{c.label}{arrow(c.key)}</button>
+                : c.label}
+            </th>
+          ))}
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -30,6 +60,7 @@ export default function LogTable({ records, onOpen, onDelete, onTranscript, onAu
           return (
             <tr key={v._id || i}>
               <td>{v._savedAt || "—"}</td>
+              <td>{dash(v.projectName)}</td>
               <td>
                 <strong>{dash(v.lastName)}, {dash(v.firstName)}</strong>
                 {/* Which verification of this case this is. A patient re-verified
@@ -44,7 +75,7 @@ export default function LogTable({ records, onOpen, onDelete, onTranscript, onAu
               <td>{dash(v.insName)}</td>
               <td>{dash(v.policyId)}</td>
               <td>{dash(v.serviceType)}</td>
-              <td><span className={"pill " + (v.network === "IN NETWORK" ? "ok" : "warn")}>{dash(v.network)}</span></td>
+              <td><span className={"pill " + statusClass(v._status)}>{STATUS[v._status] || "—"}</span></td>
               <td>
                 <div className="pill-row">
                   <span className={"pill " + verdictClass(v, comp.incomplete)}>{v._verdict || "NO TRANSCRIPT"}</span>
@@ -54,14 +85,21 @@ export default function LogTable({ records, onOpen, onDelete, onTranscript, onAu
                   )}
                 </div>
               </td>
-              <td>{dash(v.repName)}</td>
-              <td>{dash(v.callRef)}</td>
-              <td style={{ textAlign: "right" }}>
-                {(v._hasTranscript || v._transcript) && <button className="btn btn-ghost btn-sm" onClick={() => onTranscript(i)}>Transcript</button>}{" "}
-                {v._versionCount > 1 && <button className="btn btn-ghost btn-sm" onClick={() => onHistory(i)}>History</button>}{" "}
-                {v._audioFile && <button className="btn btn-ghost btn-sm" onClick={() => onAudio(i)}>Audio</button>}{" "}
-                <button className="btn btn-ghost btn-sm" onClick={() => onOpen(i)}>Re-verify</button>{" "}
-                <button className="btn btn-ghost btn-sm" onClick={() => onDelete(i)}>Delete</button>
+              <td>
+                {v._topPriority
+                  ? <span className={"pill " + priorityClass(v._topPriority)} title={PRIORITY_LABEL[v._topPriority]}>
+                    {v._topPriority}{v._errorCount > 1 ? ` ×${v._errorCount}` : ""}
+                  </span>
+                  : <span className="hint">—</span>}
+              </td>
+              <td>{dash(v.username || v.verifiedBy)}{v._qaName ? <span className="hint"> · QA {v._qaName}</span> : null}</td>
+              <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                {onQa && <><button className="btn btn-dark btn-sm" onClick={() => onQa(i)}>Review</button>{" "}</>}
+                {(v._hasTranscript || v._transcript) && <><button className="btn btn-ghost btn-sm" onClick={() => onTranscript(i)}>Transcript</button>{" "}</>}
+                {v._versionCount > 1 && <><button className="btn btn-ghost btn-sm" onClick={() => onHistory(i)}>History</button>{" "}</>}
+                {v._audioFile && onAudio && <><button className="btn btn-ghost btn-sm" onClick={() => onAudio(i)}>Audio</button>{" "}</>}
+                {onOpen && <><button className="btn btn-ghost btn-sm" onClick={() => onOpen(i)}>Re-verify</button>{" "}</>}
+                {onDelete && <button className="btn btn-ghost btn-sm" onClick={() => onDelete(i)}>Delete</button>}
               </td>
             </tr>
           );
